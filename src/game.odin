@@ -2,7 +2,6 @@ package game
 
 import "core:fmt"
 import "core:log"
-import "core:math/linalg"
 import rl "vendor:raylib"
 
 pr :: fmt.println
@@ -11,11 +10,17 @@ prf :: fmt.printfln
 Void :: struct{}
 Vec2 :: [2]f32
 Vec2i :: [2]i32
-Position :: Vec2
+Position :: Vec2i
 
 PIXEL_WINDOW_HEIGHT :: 180
+PLAYFIELD_BLOCK_H :: 18
+PLAYFIELD_BLOCK_W :: 10
+PLAYFIELD_BORDER_THICKNESS :: 10
+BLOCK_PIXEL_SIZE :: PIXEL_WINDOW_HEIGHT / PLAYFIELD_BLOCK_H
 
-WINDOW_W :: 1280
+INITIAL_FALL_INTERVAL :: 1 // sec
+
+WINDOW_W :: 720
 WINDOW_H :: 720
 TICK_RATE :: 60
 
@@ -24,6 +29,33 @@ Game_Memory :: struct {
 	game_state: Game_State,
 	resman: ^Resource_Manager,
 	debug: bool,
+	tile_index: Tile_Index,
+	block_render_data: [dynamic]Block_Render_Data,
+	fall_timer: Timer,
+	fall_y: i32,
+	fall_interval: f32,
+	input_delay: Timer,
+}
+
+Block_Render_Data :: struct {
+	x,y: f32,
+	w,h: f32,
+	color: rl.Color,
+}
+
+Tile_Index :: struct {
+	tiles: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Block_Type
+}
+
+Block_Type :: enum {
+	None,
+	Long,
+	Left_L,
+	Right_L,
+	Left_Z,
+	Right_Z,
+	T,
+	Square,
 }
 
 Entity :: struct {
@@ -43,14 +75,14 @@ Game_State :: enum {
 
 game_camera :: proc() -> rl.Camera2D {
 	if g == nil do log.error("game_camera: invalid state, Game_Memory nil")
-	w := f32(rl.GetScreenWidth())
+	// w := f32(rl.GetScreenWidth())
 	h := f32(rl.GetScreenHeight())
 
 	return {
 		zoom = h/PIXEL_WINDOW_HEIGHT,
 		// target = g.player_pos,
 		target = {},
-		offset = { w/2, h/2 },
+		offset = {},
 	}
 }
 
@@ -59,35 +91,61 @@ ui_camera :: proc() -> rl.Camera2D {
 		zoom = f32(rl.GetScreenHeight())/PIXEL_WINDOW_HEIGHT,
 	}
 }
+
+interval_count := 1
+fx: i32 = 4
 update :: proc() {
 	process_input()
+
+	// tmp falling block
+	if process_timer(&g.fall_timer) {
+		g.fall_y += 1
+		interval_count += 1
+	}
+
+	if interval_count % 4 == 0 {
+		increase_fall_rate()
+		interval_count += 1
+	}
+
+	clear(&g.block_render_data)
+	for row, field_y in g.tile_index.tiles {
+		for block_type, field_x in row {
+			if i32(field_y) == g.fall_y  && i32(field_x) == fx {
+				append(&g.block_render_data, Block_Render_Data{
+					x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+					y = f32(field_y) * BLOCK_PIXEL_SIZE,
+					w = BLOCK_PIXEL_SIZE,
+					h = BLOCK_PIXEL_SIZE,
+					color = init_block(.T),
+				})
+			} else if block_type != .None {
+				append(&g.block_render_data, Block_Render_Data{
+					x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+					y = f32(field_y) * BLOCK_PIXEL_SIZE,
+					w = BLOCK_PIXEL_SIZE,
+					h = BLOCK_PIXEL_SIZE,
+					color = init_block(block_type),
+				})
+			}
+		}
+	}
 }
 
 draw :: proc() {
 	rl.BeginDrawing()
-	rl.ClearBackground(rl.BLACK)
+	rl.ClearBackground(rl.GRAY)
 
 	rl.BeginMode2D(game_camera())
-		rect_a := rl.Rectangle{20,20,10,10}
-		if aabb_intersects(
-			g.player.pos.x, g.player.pos.y, g.player.size.x, g.player.size.y, 
-			rect_a.x,rect_a.y,rect_a.width,rect_a.height,
-			) {
-			draw_sprite(g.player.texture_id, g.player.pos, g.player.size, 0, 1, rl.RED)
-			rl.DrawRectangleV({20, 20}, {10, 10}, rl.RED)
-		} else {
-			draw_sprite(g.player.texture_id, g.player.pos, g.player.size, 0, 1, rl.WHITE)
-			rl.DrawRectangleV({20, 20}, {10, 10}, rl.PURPLE)
-		}
-		rl.DrawRectangleV({-30, -20}, {10, 10}, rl.GREEN)
-		if g.debug {
-			rl.DrawRectangleLinesEx({g.player.pos.x-1, g.player.pos.y-1, g.player.size.x+2, g.player.size.y+2}, 1, rl.BLUE)
-			rl.DrawRectangleLinesEx({rect_a.x-1, rect_a.y-1, rect_a.width+2, rect_a.height+2}, 1, rl.BLUE)
-			// 0,0 lines
-			rl.DrawLine(-WINDOW_W/2, 0, WINDOW_W/2, 0, rl.BLUE)
-			rl.DrawLine(0, -WINDOW_H/2, 0, WINDOW_H/2, rl.BLUE)
-		}
-		
+	rl.DrawRectangle(0,0,PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY)
+	rl.DrawRectangle(
+		PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
+		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY
+	)
+	for brd in g.block_render_data {
+		rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, rl.BLACK)
+		rl.DrawRectangleV({brd.x+1, brd.y+1}, {brd.w-2, brd.h-2}, brd.color)
+	}
 	rl.EndMode2D()
 
 	rl.BeginMode2D(ui_camera())
@@ -97,37 +155,67 @@ draw :: proc() {
 	rl.EndDrawing()
 }
 
+Input :: enum {
+	Down,
+	Left,
+	Right,
+	Toggle_Music,
+	Toggle_Preview,
+	Exit,
+	Toggle_Debug,
+}
+
+// Map input to keys, make a table
+
+Input_Set :: bit_set[Input]
+
+Input_Map_Entry :: struct {
+	input: Input,
+	key: rl.KeyboardKey
+}
+
+input_map := [?]Input_Map_Entry{
+	{.Toggle_Debug, .GRAVE},
+	{.Down, .DOWN},
+	{.Left, .LEFT},
+	{.Right, .RIGHT},
+	{.Toggle_Music, .M},
+	{.Toggle_Preview, .P},
+	{.Exit, .ESCAPE},
+}
+
+// when input pressed (and timer not running), start timer
+// when input pressed and timer running, dont input
 process_input :: proc() {
-    if rl.IsKeyPressed(.GRAVE) {
-        g.debug = !g.debug
-    }
-
-	input: rl.Vector2
-
-	if rl.IsKeyDown(.UP) || rl.IsKeyDown(.W) {
-		input.y -= 1
+	if g.input_delay.state == .Inactive {
+		start_timer(&g.input_delay)
 	}
-	if rl.IsKeyDown(.DOWN) || rl.IsKeyDown(.S) {
-		input.y += 1
-	}
-	if rl.IsKeyDown(.LEFT) || rl.IsKeyDown(.A) {
-		input.x -= 1
-	}
-	if rl.IsKeyDown(.RIGHT) || rl.IsKeyDown(.D) {
-		input.x += 1
-	}
+	process_timer(&g.input_delay)
 
-	input = linalg.normalize0(input)
-	g.player.pos += input * rl.GetFrameTime() * 100
-
-	if rl.IsKeyPressed(.ESCAPE) {
-		g.game_state = .Exit
+	// Read input
+	input: Input_Set
+	for entry in input_map {
+		switch entry.input {
+		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit:
+			if rl.IsKeyPressed(entry.key) {
+				input += {entry.input}
+			}
+		case .Left, .Right, .Down:
+			// check for input delay, could do this below but just hack it
+			if rl.IsKeyDown(entry.key) && is_timer_done(g.input_delay) {
+				input += {entry.input}
+				restart_timer(&g.input_delay)
+			}
+		}
 	}
 
-	if rl.IsKeyPressed(.SPACE) {
-		play_sound(.Powerup)
+	// Apply input
+	if .Left in input {
+		fx -= 1
 	}
-
+	if .Right in input {
+		fx += 1
+	}
 }
  
 // Run once: allocate, set global variable immutable values
@@ -150,21 +238,37 @@ setup :: proc() {
 		resman = resman,
 	}
 }
-
 // clear collections, set initial values
 init :: proc() {
 	g.game_state = .Play
 	g.debug = false
 
-	player: Entity
-	init_player(&player)
-	g.player = player
+	clear_playfield()
+
+	for y in 0..<PLAYFIELD_BLOCK_H {
+		for x in 0..<PLAYFIELD_BLOCK_W {
+			if ((y + 1) * PLAYFIELD_BLOCK_W + x) % 3 == 0 {
+				g.tile_index.tiles[y][x] = .Long
+			}
+		}
+	}
+
+	g.input_delay = create_timer(0.1, .One_Shot, 1, "input_delay")
+
+	g.fall_interval = INITIAL_FALL_INTERVAL
+	g.fall_y = 0
+	g.fall_timer = create_timer(INITIAL_FALL_INTERVAL, .Loop, 0, "fall")
+	start_timer(&g.fall_timer)
 }
 
-init_player :: proc(p: ^Entity) {
-	p.size = {25, 25}
-	p.texture_id = .Player
-	p.pos = -p.size / 2
+increase_fall_rate :: proc() {
+	// get remaining an tack onto timer for smooth transition
+	dt := f32(g.fall_timer.remaining)
+	g.fall_interval = max(g.fall_interval - 0.18, 0.1)
+	pr("new interval", g.fall_interval)
+	g.fall_timer = create_timer(g.fall_interval, .Loop, 0, "fall")
+	g.fall_timer.accum += dt
+	start_timer(&g.fall_timer)
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -173,7 +277,7 @@ draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation:
 		0, 0, f32(tex.width), f32(tex.height),
 	}
 	dst_rect := rl.Rectangle {
-		pos.x, pos.y, size.x, size.y,
+		f32(pos.x), f32(pos.y), size.x, size.y,
 	}
 	rl.DrawTexturePro(tex, src_rect, dst_rect, {}, rotation, tint)
 }
@@ -189,8 +293,8 @@ game_update :: proc() {
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
 	rl.InitWindow(WINDOW_W, WINDOW_H, "Odin Gamejam Template")
-	rl.SetWindowPosition(10, 125)
-	rl.SetTargetFPS(500)
+	rl.SetWindowPosition(500, 250)
+	rl.SetTargetFPS(60)
 	rl.SetExitKey(nil)
 }
 
@@ -199,6 +303,7 @@ game_init :: proc() {
 	log.info("Initializing game...")
 	setup() // run once
 	init() // run after setup, then on reset
+
 	game_hot_reloaded(g)
 }
 
@@ -269,10 +374,6 @@ aabb_intersects :: proc(a_x, a_y, a_w, a_h: f32, b_x, b_y, b_w, b_h: f32) -> boo
            b_y + b_h < a_y)
 }
 
-circle_intersects:: proc(a_pos: Position, a_radius: f32, b_pos: Position, b_radius: f32) -> bool {
-	return linalg.length2(a_pos - b_pos) < (a_radius + b_radius) * (a_radius + b_radius)
-}
-
 Texture_ID :: enum {
     Player,
 }
@@ -287,4 +388,35 @@ play_sound :: proc(id: Sound_ID) {
 
 is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
+}
+
+init_block :: proc(type: Block_Type) -> rl.Color {
+	color: rl.Color
+	switch type {
+	case .None:
+		color = rl.BLANK
+	case .Long:
+		color = rl.YELLOW
+	case .Left_L:
+		color = rl.PINK
+	case .Right_L:
+		color = rl.PURPLE
+	case .Left_Z:
+		color = rl.ORANGE
+	case .Right_Z:
+		color = rl.YELLOW
+	case .T:
+		color = rl.BLUE
+	case .Square:
+		color = rl.GREEN
+	}
+	return color
+}
+
+clear_playfield :: proc() {
+	for y in 0..<PLAYFIELD_BLOCK_H {
+		for x in 0..<PLAYFIELD_BLOCK_W {
+			g.tile_index.tiles[y][x] = .None
+		}
+	}
 }
