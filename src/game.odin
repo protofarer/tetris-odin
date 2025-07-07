@@ -2,6 +2,7 @@ package game
 
 import "core:fmt"
 import "core:log"
+import sa "core:container/small_array"
 import rl "vendor:raylib"
 
 pr :: fmt.println
@@ -35,6 +36,7 @@ Game_Memory :: struct {
 	fall_y: i32,
 	fall_interval: f32,
 	input_delay: Timer,
+	tetramino: Tetramino,
 }
 
 Block_Render_Data :: struct {
@@ -44,18 +46,7 @@ Block_Render_Data :: struct {
 }
 
 Tile_Index :: struct {
-	tiles: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Block_Type
-}
-
-Block_Type :: enum {
-	None,
-	Long,
-	Left_L,
-	Right_L,
-	Left_Z,
-	Right_Z,
-	T,
-	Square,
+	tiles: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Tetramino_Type
 }
 
 Entity :: struct {
@@ -75,12 +66,10 @@ Game_State :: enum {
 
 game_camera :: proc() -> rl.Camera2D {
 	if g == nil do log.error("game_camera: invalid state, Game_Memory nil")
-	// w := f32(rl.GetScreenWidth())
 	h := f32(rl.GetScreenHeight())
 
 	return {
 		zoom = h/PIXEL_WINDOW_HEIGHT,
-		// target = g.player_pos,
 		target = {},
 		offset = {},
 	}
@@ -93,16 +82,94 @@ ui_camera :: proc() -> rl.Camera2D {
 }
 
 interval_count := 1
-fx: i32 = 4
+
+// TODO: clear g.tetramino upon lockdown
+spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
+	if g.tetramino != {} {
+		log.error("Cannot spawn tetramino when one currently exists")
+		return
+	}
+	t := Tetramino{
+		type = type,
+		layout = get_layout(type, 0),
+	}
+	g.tetramino = t
+}
+
+// get tile and check OOB
+get_tile :: proc(x: i32, y: i32) -> (Tetramino_Type, bool) {
+	if x < 0 || x >= PLAYFIELD_BLOCK_W || y < 0 || y >= PLAYFIELD_BLOCK_H {
+		return .None, false
+	}
+	return g.tile_index.tiles[y][x], true
+}
+
 update :: proc() {
 	process_input()
+	// TODO: rename to appropriate nomenclature, check for collision before moving
+	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
 
-	// tmp falling block
-	if process_timer(&g.fall_timer) {
-		g.fall_y += 1
-		interval_count += 1
+	old_tetra_layout_field_position := g.tetramino.layout_field_position
+
+	// Mutated tetra blocks from input and fall
+	new_tetramino_positions: sa.Small_Array(4, Position)
+	for row, layout_local_y in g.tetramino.layout {
+		for val, layout_local_x in row {
+			if val != 0 {
+				sa.append(
+					&new_tetramino_positions, 
+					Position{
+						g.tetramino.layout_field_position.x + i32(layout_local_x), 
+						g.tetramino.layout_field_position.y + i32(layout_local_y)
+					}
+				)
+			}
+		}
 	}
 
+	// Check if can move in x
+	if g.tetramino.intended_relative_position != {} {
+		can_move_x := true
+		for pos in sa.slice(&new_tetramino_positions) {
+			intended_x := pos.x + g.tetramino.intended_relative_position.x
+			if tetra_type, in_bounds := get_tile(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
+				can_move_x = false
+				break
+			}
+		}
+		if can_move_x {
+			// move layout in x
+			g.tetramino.layout_field_position.x += g.tetramino.intended_relative_position.x
+		}
+		g.tetramino.intended_relative_position = {}
+	}
+
+	// Check if can fall
+	if process_timer(&g.fall_timer) {
+		// check next down position for collision: block or ground
+		is_locked := false
+		for &pos in sa.slice(&new_tetramino_positions) {
+			tetra_type, in_bounds := get_tile(pos.x, pos.y + 1)
+			if !in_bounds || tetra_type != .None {
+				// locked: hit bottom or a locked block below
+				// TODO: next_tetra routine: preview, spawn, eval_line_clear
+				is_locked = true
+			} 
+		}
+		if !is_locked {
+			// fall
+			g.tetramino.layout_field_position.y += 1
+		}
+		interval_count += 1 // tmp
+	}
+
+	// move tetra based on layout_field_pos delta
+	d_tetra_layout_field_position := g.tetramino.layout_field_position - old_tetra_layout_field_position
+	for &pos in sa.slice(&new_tetramino_positions) {
+		pos += d_tetra_layout_field_position
+	}
+
+	// tmp
 	if interval_count % 4 == 0 {
 		increase_fall_rate()
 		interval_count += 1
@@ -111,15 +178,25 @@ update :: proc() {
 	clear(&g.block_render_data)
 	for row, field_y in g.tile_index.tiles {
 		for block_type, field_x in row {
-			if i32(field_y) == g.fall_y  && i32(field_x) == fx {
-				append(&g.block_render_data, Block_Render_Data{
-					x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-					y = f32(field_y) * BLOCK_PIXEL_SIZE,
-					w = BLOCK_PIXEL_SIZE,
-					h = BLOCK_PIXEL_SIZE,
-					color = init_block(.T),
-				})
-			} else if block_type != .None {
+
+			// tetramino data
+			is_occupied_by_tetra := false
+			for tetra_field_pos in sa.slice(&new_tetramino_positions) {
+				if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
+					append(&g.block_render_data, Block_Render_Data{
+						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+						y = f32(field_y) * BLOCK_PIXEL_SIZE,
+						w = BLOCK_PIXEL_SIZE,
+						h = BLOCK_PIXEL_SIZE,
+						color = init_block(g.tetramino.type),
+					})
+					is_occupied_by_tetra = true
+				}
+			} 
+			if is_occupied_by_tetra do continue
+
+			// playfield data
+			if block_type != .None {
 				append(&g.block_render_data, Block_Render_Data{
 					x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
 					y = f32(field_y) * BLOCK_PIXEL_SIZE,
@@ -163,6 +240,8 @@ Input :: enum {
 	Toggle_Preview,
 	Exit,
 	Toggle_Debug,
+	Rotate_CCW,
+	Rotate_CW,
 }
 
 // Map input to keys, make a table
@@ -179,6 +258,8 @@ input_map := [?]Input_Map_Entry{
 	{.Down, .DOWN},
 	{.Left, .LEFT},
 	{.Right, .RIGHT},
+	{.Rotate_CCW, .Z},
+	{.Rotate_CW, .X},
 	{.Toggle_Music, .M},
 	{.Toggle_Preview, .P},
 	{.Exit, .ESCAPE},
@@ -206,15 +287,26 @@ process_input :: proc() {
 				input += {entry.input}
 				restart_timer(&g.input_delay)
 			}
+		case .Rotate_CCW, .Rotate_CW:
+			if rl.IsKeyPressed(entry.key) && is_timer_done(g.input_delay) {
+				input += {entry.input}
+				restart_timer(&g.input_delay)
+			}
 		}
 	}
 
 	// Apply input
 	if .Left in input {
-		fx -= 1
+		g.tetramino.intended_relative_position.x = -1
+	} else if .Right in input {
+		g.tetramino.intended_relative_position.x = 1
 	}
-	if .Right in input {
-		fx += 1
+
+	if .Rotate_CCW in input {
+		tetramino_next_layout()
+	} else if .Rotate_CW in input {
+		tetramino_previous_layout()
+
 	}
 }
  
@@ -232,6 +324,7 @@ setup :: proc() {
 	resman := new(Resource_Manager)
 	setup_resource_manager(resman)
 	load_all_assets(resman)
+	init_layout_tables()
 
 	g = new(Game_Memory)
 	g^ = Game_Memory {
@@ -245,13 +338,13 @@ init :: proc() {
 
 	clear_playfield()
 
-	for y in 0..<PLAYFIELD_BLOCK_H {
-		for x in 0..<PLAYFIELD_BLOCK_W {
-			if ((y + 1) * PLAYFIELD_BLOCK_W + x) % 3 == 0 {
-				g.tile_index.tiles[y][x] = .Long
-			}
-		}
-	}
+	// for y in 0..<PLAYFIELD_BLOCK_H {
+	// 	for x in 0..<PLAYFIELD_BLOCK_W {
+	// 		if ((y + 1) * PLAYFIELD_BLOCK_W + x) % 3 == 0 {
+	// 			g.tile_index.tiles[y][x] = .L
+	// 		}
+	// 	}
+	// }
 
 	g.input_delay = create_timer(0.1, .One_Shot, 1, "input_delay")
 
@@ -303,6 +396,7 @@ game_init :: proc() {
 	log.info("Initializing game...")
 	setup() // run once
 	init() // run after setup, then on reset
+	spawn_tetramino(.T, {})
 
 	game_hot_reloaded(g)
 }
@@ -390,24 +484,24 @@ is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
 }
 
-init_block :: proc(type: Block_Type) -> rl.Color {
+init_block :: proc(type: Tetramino_Type) -> rl.Color {
 	color: rl.Color
 	switch type {
 	case .None:
 		color = rl.BLANK
-	case .Long:
+	case .I:
 		color = rl.YELLOW
-	case .Left_L:
+	case .J:
 		color = rl.PINK
-	case .Right_L:
+	case .L:
 		color = rl.PURPLE
-	case .Left_Z:
+	case .Z:
 		color = rl.ORANGE
-	case .Right_Z:
+	case .S:
 		color = rl.YELLOW
 	case .T:
 		color = rl.BLUE
-	case .Square:
+	case .O:
 		color = rl.GREEN
 	}
 	return color
