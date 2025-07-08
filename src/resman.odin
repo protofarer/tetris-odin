@@ -22,6 +22,14 @@ Resource_Manager :: struct {
     // transparency_color: rl.Color,
 }
 
+Texture_ID :: enum {
+    Player,
+}
+
+Sound_ID :: enum { 
+    Powerup,
+}
+
 setup_resource_manager :: proc(rm: ^Resource_Manager) {
     log.info("Setup resource manager...")
     rm.base_texture_path = "assets/"

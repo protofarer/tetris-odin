@@ -6,9 +6,8 @@ N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
 Tetramino :: struct {
 	type: Tetramino_Type,
 	layout: Tetramino_Layout,
-	layout_i: int,
+	layout_idx: int,
 	layout_field_position: Position,
-	intended_relative_position: Position,
 }
 
 Tetramino_Type :: enum {
@@ -58,14 +57,16 @@ init_layout_tables :: proc() {
 	})
 }
 
-tetramino_next_layout :: proc() {
-	g.tetramino.layout_i = (g.tetramino.layout_i + 1) % N_LAYOUTS_PER_TETRAMINO_TYPE
-	g.tetramino.layout = get_layout(g.tetramino.type, g.tetramino.layout_i)
+get_next_layout :: proc(t: Tetramino) -> (Tetramino_Layout, int) {
+	layout_idx := (t.layout_idx + 1) % N_LAYOUTS_PER_TETRAMINO_TYPE
+	layout := get_layout(t.type, layout_idx)
+	return layout, layout_idx
 }
 
-tetramino_previous_layout :: proc() {
-	g.tetramino.layout_i = (g.tetramino.layout_i - 1) % N_LAYOUTS_PER_TETRAMINO_TYPE
-	g.tetramino.layout = get_layout(g.tetramino.type, g.tetramino.layout_i)
+get_previous_layout :: proc(t: Tetramino) -> (Tetramino_Layout, int) {
+	layout_idx := (t.layout_idx - 1 + N_LAYOUTS_PER_TETRAMINO_TYPE) % N_LAYOUTS_PER_TETRAMINO_TYPE
+	layout := get_layout(t.type, layout_idx)
+	return layout, layout_idx
 }
 
 get_layout :: proc(t: Tetramino_Type, i: int) -> Tetramino_Layout  {
