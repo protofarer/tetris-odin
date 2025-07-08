@@ -25,6 +25,34 @@ WINDOW_W :: 720
 WINDOW_H :: 720
 TICK_RATE :: 60
 
+DAS_FRAMES :: 23
+
+// frames per row
+LEVEL_DROP_RATES := [?]i32{
+	53,
+	49,
+	45,
+	41,
+	37,
+	33,
+	28,
+	22,
+	17,
+	11,
+	 10,
+	 9,
+	 8,
+	 7,
+	 6,
+	 6,
+	 5,
+	 5,
+	 4,
+	 4,
+	 3,
+}
+SUPER_DROP_RATE :: 3
+
 Game_Memory :: struct {
 	player: Entity,
 	game_state: Game_State,
@@ -32,14 +60,13 @@ Game_Memory :: struct {
 	debug: bool,
 	playfield: Playfield,
 	block_render_data: [dynamic]Block_Render_Data,
-	fall_timer: Timer,
-	fall_y: i32,
-	fall_interval: f32,
 	input_delay: Timer,
 	tetramino: Tetramino,
 	input: Input_Set,
+	fall_frames: i32,
 	das: bool, // Delayed Auto Shift
 	das_frames: i32,
+	level: i32,
 }
 
 Block_Render_Data :: struct {
@@ -83,8 +110,6 @@ ui_camera :: proc() -> rl.Camera2D {
 		zoom = f32(rl.GetScreenHeight())/PIXEL_WINDOW_HEIGHT,
 	}
 }
-
-interval_count := 1
 
 // TODO: clear g.tetramino upon lockdown
 spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
@@ -192,8 +217,12 @@ update :: proc() {
 		}
 	}
 
-	// Check if can fall
-	if process_timer(&g.fall_timer) {
+	// Drop
+	level_drop_rate := get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
+	drop_rate := .Down in input ? SUPER_DROP_RATE : level_drop_rate
+	if g.fall_frames < drop_rate {
+		g.fall_frames += 1
+	} else {
 		// check next down position for collision: block or ground
 		is_locked := false
 		for &pos in sa.slice(&old_tetramino_positions) {
@@ -209,17 +238,30 @@ update :: proc() {
 			// fall
 			g.tetramino.layout_field_position.y += 1
 		}
-		interval_count += 1 // tmp
+		g.fall_frames = 0
 	}
+
+	// if process_timer(&g.fall_timer) {
+	// 	// check next down position for collision: block or ground
+	// 	is_locked := false
+	// 	for &pos in sa.slice(&old_tetramino_positions) {
+	// 		tetra_type, in_bounds := get_tile(pos.x, pos.y + 1)
+	// 		if !in_bounds || tetra_type != .None {
+	// 			// locked: hit bottom or a locked block below
+	// 			// TODO: next_tetra routine: preview, spawn, eval_line_clear
+	// 			is_locked = true
+	// 			break
+	// 		} 
+	// 	}
+	// 	if !is_locked {
+	// 		// fall
+	// 		g.tetramino.layout_field_position.y += 1
+	// 	}
+	// 	interval_count += 1 // tmp
+	// }
 
 	// move new tetra based on layout_field_pos delta
 	new_tetramino_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
-
-	// tmp
-	if interval_count % 4 == 0 {
-		increase_fall_rate()
-		interval_count += 1
-	}
 
 	clear(&g.block_render_data)
 	for row, field_y in g.playfield.blocks {
@@ -344,7 +386,7 @@ process_input :: proc(input: ^Input_Set) {
 					g.das = true
 				} else {
 					g.das_frames += 1
-					if g.das_frames > 23 {
+					if g.das_frames > DAS_FRAMES {
 						g.das = false
 					}
 				}
@@ -368,7 +410,7 @@ process_input :: proc(input: ^Input_Set) {
 					g.das = true
 				} else {
 					g.das_frames += 1
-					if g.das_frames > 23 {
+					if g.das_frames > DAS_FRAMES {
 						g.das = false
 					}
 				}
@@ -429,25 +471,7 @@ init :: proc() {
 	// }
 
 	g.input_delay = create_timer(0.1, .One_Shot, 1, "input_delay")
-
-	g.fall_interval = INITIAL_FALL_INTERVAL
-	g.fall_y = 0
-	g.fall_timer = create_timer(INITIAL_FALL_INTERVAL, .Loop, 0, "fall")
-	start_timer(&g.fall_timer)
 }
-
-increase_fall_rate :: proc() {
-	// get remaining an tack onto timer for smooth transition
-	dt := f32(g.fall_timer.remaining)
-	g.fall_interval = max(g.fall_interval - 0.18, 0.1)
-	pr("new interval", g.fall_interval)
-	g.fall_timer = create_timer(g.fall_interval, .Loop, 0, "fall")
-	g.fall_timer.accum += dt
-	start_timer(&g.fall_timer)
-}
-
-set_super_fall_rate :: proc() {}
-unset_super_fall_rate :: proc() {}
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
 	tex := get_texture(texture_id)
@@ -472,7 +496,7 @@ game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
 	rl.InitWindow(WINDOW_W, WINDOW_H, "Odin Gamejam Template")
 	rl.SetWindowPosition(500, 250)
-	rl.SetTargetFPS(60)
+	rl.SetTargetFPS(TICK_RATE)
 	rl.SetExitKey(nil)
 }
 
@@ -590,4 +614,8 @@ clear_playfield :: proc() {
 			g.playfield.blocks[y][x] = .None
 		}
 	}
+}
+
+get_current_frames_per_row :: proc(table: []i32, level: i32) -> i32 {
+	return table[level]
 }
