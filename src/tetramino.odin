@@ -2,6 +2,7 @@ package game
 import sa "core:container/small_array"
 
 N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
+TETRAMINO_BLOCKS_PER_LAYOUT :: 4
 
 Tetramino :: struct {
 	type: Tetramino_Type,

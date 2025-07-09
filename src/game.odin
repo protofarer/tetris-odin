@@ -2,7 +2,6 @@ package game
 
 import "core:fmt"
 import "core:log"
-import sa "core:container/small_array"
 import rl "vendor:raylib"
 
 pr :: fmt.println
@@ -26,6 +25,9 @@ WINDOW_H :: 720
 TICK_RATE :: 60
 
 DAS_FRAMES :: 23
+ARR_FRAMES :: 9 // TODO: replace delay_timer
+ARE_CLEAR_FRAMES :: 93
+ARE_FRAMES :: 2 // invis for 1st frame after spawning
 
 // frames per row
 LEVEL_DROP_RATES := [?]i32{
@@ -53,20 +55,42 @@ LEVEL_DROP_RATES := [?]i32{
 }
 SUPER_DROP_RATE :: 3
 
+POINTS_TABLE := [?]i32{
+	40,		// single
+	100,	// double
+	300,	// triple
+	1200	// tetris
+}
+
+LINES_PER_LEVEL :: 10
+
 Game_Memory :: struct {
-	player: Entity,
 	game_state: Game_State,
 	resman: ^Resource_Manager,
 	debug: bool,
+
 	playfield: Playfield,
+	tetramino: Tetramino,
+	level: i32,
+	score: i32,
+
 	block_render_data: [dynamic]Block_Render_Data,
 	input_delay: Timer,
-	tetramino: Tetramino,
 	input: Input_Set,
+
 	fall_frames: i32,
+
 	das: bool, // Delayed Auto Shift
 	das_frames: i32,
-	level: i32,
+
+	lines_just_cleared: bool,
+	lines_just_cleared_start: i32,
+	lines_just_cleared_count: i32,
+
+	lines_cleared_accum: i32,
+
+	entry_frame_count: i32, // entry delay aka ARE
+	entry_frame_total: i32,
 }
 
 Block_Render_Data :: struct {
@@ -111,9 +135,8 @@ ui_camera :: proc() -> rl.Camera2D {
 	}
 }
 
-// TODO: clear g.tetramino upon lockdown
 spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
-	if g.tetramino != {} {
+	if g.tetramino.type != .None {
 		log.error("Cannot spawn tetramino when one currently exists")
 		return
 	}
@@ -122,32 +145,52 @@ spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
 		layout = get_layout(type, 0),
 	}
 	g.tetramino = t
+	g.fall_frames = 0 // reset fall "timer"
 }
 
 // get tile and check OOB
-get_tile :: proc(x: i32, y: i32) -> (Tetramino_Type, bool) {
+get_playfield_block :: proc(x: i32, y: i32) -> (Tetramino_Type, bool) {
 	if x < 0 || x >= PLAYFIELD_BLOCK_W || y < 0 || y >= PLAYFIELD_BLOCK_H {
 		return .None, false
 	}
 	return g.playfield.blocks[y][x], true
 }
 
-get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_position: Position) -> sa.Small_Array(4, Position) {
-	new_tetramino_positions: sa.Small_Array(4, Position)
+// Returns 4 blocks as a rule, otherwise remains a usable zero valued array
+get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_position: Position) -> [TETRAMINO_BLOCKS_PER_LAYOUT]Position {
+	idx := 0
+	new_tetramino_positions: [TETRAMINO_BLOCKS_PER_LAYOUT]Position
 	for row, layout_local_y in layout {
 		for val, layout_local_x in row {
 			if val != 0 {
-				sa.append(
-					&new_tetramino_positions, 
-					Position{
+				new_tetramino_positions[idx] = Position{
 						layout_field_position.x + i32(layout_local_x), 
 						layout_field_position.y + i32(layout_local_y)
 					}
-				)
+				idx += 1
 			}
 		}
 	}
 	return new_tetramino_positions
+}
+
+// spawn tetra and spawn preview
+spawner :: proc() {
+	if g.tetramino.type == .None  {
+		 if g.entry_frame_count >= g.entry_frame_total {
+
+			if !g.lines_just_cleared {
+				spawn_tetramino(.T)
+
+			} else if g.lines_just_cleared {
+				// update next preview (randomizer)
+				g.lines_just_cleared = false
+			}
+			g.entry_frame_count = 0
+			return
+		}
+		g.entry_frame_count += 1
+	}
 }
 
 update :: proc() {
@@ -157,7 +200,14 @@ update :: proc() {
 	input: Input_Set
 	process_input(&input)
 
-	old_tetramino_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
+	spawner()
+
+	// CSDR
+	// if g.tetramino != {} {
+	// 	update_tetramino()
+	// }
+
+	old_tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
 
 	intended_move_x: i8
 	intended_rotation: i8
@@ -178,9 +228,9 @@ update :: proc() {
 	// Check if can move in x
 	if intended_move_x != 0 {
 		can_move_x := true
-		for pos in sa.slice(&old_tetramino_positions) {
+		for pos in old_tetra_positions {
 			intended_x := pos.x + i32(intended_move_x)
-			if tetra_type, in_bounds := get_tile(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
+			if tetra_type, in_bounds := get_playfield_block(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
 				can_move_x = false
 				break
 			}
@@ -204,8 +254,8 @@ update :: proc() {
 
 		intended_positions := get_tetramino_field_positions(intended_layout, g.tetramino.layout_field_position)
 		can_rotate := true
-		for intended_position in sa.slice(&intended_positions) {
-			if tetra_type, in_bounds := get_tile(intended_position.x, intended_position.y); !in_bounds || tetra_type != .None {
+		for intended_position in intended_positions {
+			if tetra_type, in_bounds := get_playfield_block(intended_position.x, intended_position.y); !in_bounds || tetra_type != .None {
 				can_rotate = false
 				break
 			}
@@ -225,16 +275,48 @@ update :: proc() {
 	} else {
 		// check next down position for collision: block or ground
 		is_locked := false
-		for &pos in sa.slice(&old_tetramino_positions) {
-			tetra_type, in_bounds := get_tile(pos.x, pos.y + 1)
+		for pos in old_tetra_positions {
+			tetra_type, in_bounds := get_playfield_block(pos.x, pos.y + 1)
 			if !in_bounds || tetra_type != .None {
-				// locked: hit bottom or a locked block below
-				// TODO: next_tetra routine: preview, spawn, eval_line_clear
 				is_locked = true
 				break
 			} 
 		}
-		if !is_locked {
+		if is_locked {
+			pr("RUNNING LOCKED CODE")
+			// locked: hit bottom or a locked block below
+			// TODO: next_tetra routine: preview, spawn, eval_line_clear
+			// move tetra to playfield
+			tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
+			for pos in tetra_positions {
+				set_playfield_block(pos.x, pos.y, g.tetramino.type)
+			}
+
+			// null g.tetra
+			// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
+			// TODO: hack
+			g.tetramino = {
+				type = .None
+			}
+
+			// TODO: 
+			// check for line clear, set clear_rows: cleared_lines_start and lines_cleared
+			// start, n_lines_cleared = clear_lines() // if -1, noop
+			// g.cleared_lines_start = start
+			// g.lines_cleared_count += n_lines_cleared
+			// g.entry_frame_total = n_lines > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES
+			g.entry_frame_total = ARE_CLEAR_FRAMES
+
+			// update score
+			n_lines_cleared :i32= 2
+			if n_lines_cleared > 0 {
+				g.score += calc_points(g.level, n_lines_cleared)
+
+				if should_level_increase() {
+					g.level += 1
+				}
+			}
+		} else {
 			// fall
 			g.tetramino.layout_field_position.y += 1
 		}
@@ -268,20 +350,22 @@ update :: proc() {
 		for block_type, field_x in row {
 
 			// tetramino data
-			is_occupied_by_tetra := false
-			for tetra_field_pos in sa.slice(&new_tetramino_positions) {
-				if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
-					append(&g.block_render_data, Block_Render_Data{
-						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-						y = f32(field_y) * BLOCK_PIXEL_SIZE,
-						w = BLOCK_PIXEL_SIZE,
-						h = BLOCK_PIXEL_SIZE,
-						color = init_block(g.tetramino.type),
-					})
-					is_occupied_by_tetra = true
-				}
-			} 
-			if is_occupied_by_tetra do continue
+			if g.tetramino.type != .None {
+				is_occupied_by_tetra := false
+				for tetra_field_pos in new_tetramino_positions {
+					if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
+						append(&g.block_render_data, Block_Render_Data{
+							x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+							y = f32(field_y) * BLOCK_PIXEL_SIZE,
+							w = BLOCK_PIXEL_SIZE,
+							h = BLOCK_PIXEL_SIZE,
+							color = init_block(g.tetramino.type),
+						})
+						is_occupied_by_tetra = true
+					}
+				} 
+				if is_occupied_by_tetra do continue
+			}
 
 			// playfield data
 			if block_type != .None {
@@ -322,7 +406,7 @@ draw :: proc() {
 	rl.EndMode2D()
 
 	rl.BeginMode2D(ui_camera())
-		rl.DrawText(fmt.ctprintf("player_pos: %v", g.player.pos), 5, 5, 10, rl.WHITE)
+		rl.DrawText(fmt.ctprintf("layout_pos: %v", g.tetramino.layout_field_position), 5, 5, 10, rl.WHITE)
 	rl.EndMode2D()
 
 	rl.EndDrawing()
@@ -459,6 +543,8 @@ init :: proc() {
 	g.debug = false
 	g.das = false
 	g.das_frames = 0
+	g.entry_frame_count = 0
+	g.entry_frame_total = ARE_FRAMES
 
 	clear_playfield()
 
@@ -616,6 +702,27 @@ clear_playfield :: proc() {
 	}
 }
 
+set_playfield_block :: proc(x: i32, y: i32, tetra_type: Tetramino_Type) {
+	g.playfield.blocks[y][x] = tetra_type
+}
+
 get_current_frames_per_row :: proc(table: []i32, level: i32) -> i32 {
 	return table[level]
+}
+
+calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
+	idx: int
+	if n_lines_cleared > 3 {
+		idx = 3
+	} else {
+		idx = int(n_lines_cleared) - 1
+	}
+	return POINTS_TABLE[idx] * (level + 1)
+}
+
+should_level_increase :: proc() -> bool {
+	if g.lines_cleared_accum > g.level * LINES_PER_LEVEL && g.lines_cleared_accum % LINES_PER_LEVEL == 0 {
+		return true
+	}
+	return false
 }
