@@ -79,8 +79,8 @@ Game_Memory :: struct {
 	score: i32,
 
 	block_render_data: sa.Small_Array(PLAYFIELD_BLOCK_W * PLAYFIELD_BLOCK_H, Block_Render_Data),
-	input_delay: Timer,
-	input_repeat: Timer,
+	input_delay_timer: Timer,
+	input_repeat_timer: Timer,
 	input: Input_Set,
 
 	fall_frames: i32,
@@ -467,6 +467,9 @@ input_map := [?]Input_Map_Entry{
 	{.Down, .DOWN},
 	{.Left, .LEFT},
 	{.Right, .RIGHT},
+	{.Down, .S},
+	{.Left, .A},
+	{.Right, .D},
 	{.Rotate_CCW, .Z},
 	{.Rotate_CW, .X},
 	{.Toggle_Music, .M},
@@ -486,30 +489,30 @@ process_input :: proc(input: ^Input_Set) {
 		case .Left, .Right:
 			// check for input delay, could do this below but just hack it
 			if rl.IsKeyDown(entry.key) {
-				process_timer(&g.input_delay)
-				process_timer(&g.input_repeat)
+				process_timer(&g.input_delay_timer)
+				process_timer(&g.input_repeat_timer)
 
 				// Kickoff input delay timer
-				if g.input_delay.state == .Inactive && g.input_repeat.state != .Running {
+				if g.input_delay_timer.state == .Inactive && g.input_repeat_timer.state != .Running {
 					input^ += {entry.input}
-					restart_timer(&g.input_delay)
+					restart_timer(&g.input_delay_timer)
 				}
 
 				// Kickoff input repeat timer, apply input once
-				if is_timer_done(g.input_delay) && g.input_repeat.state == .Inactive {
+				if is_timer_done(g.input_delay_timer) && g.input_repeat_timer.state == .Inactive {
 					input^ += {entry.input}
-					start_timer(&g.input_repeat)
+					start_timer(&g.input_repeat_timer)
 				}
 
 				// Apply repeat input
-				if is_timer_done(g.input_repeat) {
+				if is_timer_done(g.input_repeat_timer) {
 					input^ += {entry.input}
-					restart_timer(&g.input_repeat)
+					restart_timer(&g.input_repeat_timer)
 				}
 			}
 			if rl.IsKeyReleased(entry.key) {
-				reset_timer(&g.input_delay)
-				reset_timer(&g.input_repeat)
+				reset_timer(&g.input_delay_timer)
+				reset_timer(&g.input_repeat_timer)
 			}
 
 		// Down input is a flag, toggling super gravity
@@ -549,8 +552,8 @@ setup :: proc() {
 	g^ = Game_Memory {
 		resman = resman,
 	}
-	g.input_repeat = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat")
-	g.input_delay = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_delay")
+	g.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
+	g.input_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_delay_timer")
 	g.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 }
 
@@ -569,8 +572,8 @@ init :: proc() {
 	g.fall_frames = 0
 	g.show_lines_cleared_flash = false
 	g.lines_cleared_accum = 0
-	reset_timer(&g.input_delay)
-	reset_timer(&g.input_repeat)
+	reset_timer(&g.input_delay_timer)
+	reset_timer(&g.input_repeat_timer)
 
 	sa.clear(&g.lines_just_cleared_y_positions)
 	sa.clear(&g.block_render_data)
