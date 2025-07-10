@@ -3,6 +3,7 @@ package game
 import "core:fmt"
 import "core:log"
 import rl "vendor:raylib"
+import sa "core:container/small_array"
 
 pr :: fmt.println
 prf :: fmt.printfln
@@ -12,6 +13,7 @@ Vec2 :: [2]f32
 Vec2i :: [2]i32
 Position :: Vec2i
 
+BACKGROUND_COLOR :: rl.LIGHTGRAY
 PIXEL_WINDOW_HEIGHT :: 180
 PLAYFIELD_BLOCK_H :: 18
 PLAYFIELD_BLOCK_W :: 10
@@ -27,8 +29,10 @@ TICK_RATE :: 60
 DAS_FRAMES :: 23
 ARR_FRAMES :: 9 // TODO: replace delay_timer
 ARE_CLEAR_FRAMES :: 93
-ARE_FRAMES :: 2 // invis for 1st frame after spawning
+ARE_FRAMES :: 2 // TODO: invis for 1st frame after spawning
 
+LINE_CLEAR_ANIMATION_FRAME_INTERVAL :: 10
+LINE_CLEAR_FLASH_COLOR :: rl.GRAY
 // frames per row
 LEVEL_DROP_RATES := [?]i32{
 	53,
@@ -74,8 +78,9 @@ Game_Memory :: struct {
 	level: i32,
 	score: i32,
 
-	block_render_data: [dynamic]Block_Render_Data,
+	block_render_data: sa.Small_Array(PLAYFIELD_BLOCK_W * PLAYFIELD_BLOCK_H, Block_Render_Data),
 	input_delay: Timer,
+	input_repeat: Timer,
 	input: Input_Set,
 
 	fall_frames: i32,
@@ -83,14 +88,16 @@ Game_Memory :: struct {
 	das: bool, // Delayed Auto Shift
 	das_frames: i32,
 
-	lines_just_cleared: bool,
-	lines_just_cleared_start: i32,
-	lines_just_cleared_count: i32,
+	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
+	show_lines_cleared_flash: bool,
 
 	lines_cleared_accum: i32,
 
-	entry_frame_count: i32, // entry delay aka ARE
-	entry_frame_total: i32,
+	// entry_frame_count: i32, // entry delay aka ARE
+	// entry_frame_total: i32,
+	entry_delay_timer: Timer,
+
+	level_drop_rate: i32,
 }
 
 Block_Render_Data :: struct {
@@ -143,6 +150,7 @@ spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
 	t := Tetramino{
 		type = type,
 		layout = get_layout(type, 0),
+		layout_field_position = {3,0},
 	}
 	g.tetramino = t
 	g.fall_frames = 0 // reset fall "timer"
@@ -174,33 +182,12 @@ get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_pos
 	return new_tetramino_positions
 }
 
-// spawn tetra and spawn preview
-spawner :: proc() {
-	if g.tetramino.type == .None  {
-		 if g.entry_frame_count >= g.entry_frame_total {
-
-			if !g.lines_just_cleared {
-				spawn_tetramino(.T)
-
-			} else if g.lines_just_cleared {
-				// update next preview (randomizer)
-				g.lines_just_cleared = false
-			}
-			g.entry_frame_count = 0
-			return
-		}
-		g.entry_frame_count += 1
-	}
-}
-
 update :: proc() {
 	// TODO: rename to appropriate nomenclature, check for collision before moving
 	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
 
 	input: Input_Set
 	process_input(&input)
-
-	spawner()
 
 	// CSDR
 	// if g.tetramino != {} {
@@ -268,8 +255,7 @@ update :: proc() {
 	}
 
 	// Drop
-	level_drop_rate := get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
-	drop_rate := .Down in input ? SUPER_DROP_RATE : level_drop_rate
+	drop_rate := .Down in input ? SUPER_DROP_RATE : g.level_drop_rate
 	if g.fall_frames < drop_rate {
 		g.fall_frames += 1
 	} else {
@@ -283,10 +269,9 @@ update :: proc() {
 			} 
 		}
 		if is_locked {
-			pr("RUNNING LOCKED CODE")
 			// locked: hit bottom or a locked block below
-			// TODO: next_tetra routine: preview, spawn, eval_line_clear
-			// move tetra to playfield
+
+			// create blocks at tetra locked positions
 			tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
 			for pos in tetra_positions {
 				set_playfield_block(pos.x, pos.y, g.tetramino.type)
@@ -294,28 +279,35 @@ update :: proc() {
 
 			// null g.tetra
 			// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
-			// TODO: hack
 			g.tetramino = {
 				type = .None
 			}
 
-			// TODO: 
-			// check for line clear, set clear_rows: cleared_lines_start and lines_cleared
-			// start, n_lines_cleared = clear_lines() // if -1, noop
-			// g.cleared_lines_start = start
-			// g.lines_cleared_count += n_lines_cleared
-			// g.entry_frame_total = n_lines > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES
-			g.entry_frame_total = ARE_CLEAR_FRAMES
+			y_positions_cleared := eval_lines_cleared()
+			n_lines_cleared := i32(sa.len(y_positions_cleared))
+			set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
+			restart_timer(&g.entry_delay_timer)
+			g.lines_cleared_accum += n_lines_cleared
+			g.lines_just_cleared_y_positions = y_positions_cleared
+
+			// TODO: lines cleared animation
+			// toggle show_blocks_cleared bool for all cleared blocks
+			// use y_positions_cleared -> store in global
+			// TODO: remove lines
 
 			// update score
-			n_lines_cleared :i32= 2
 			if n_lines_cleared > 0 {
 				g.score += calc_points(g.level, n_lines_cleared)
 
 				if should_level_increase() {
 					g.level += 1
+					g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
+					// TODO: increase speed
 				}
 			}
+
+			// TODO: randomizer and preview block
+
 		} else {
 			// fall
 			g.tetramino.layout_field_position.y += 1
@@ -323,29 +315,43 @@ update :: proc() {
 		g.fall_frames = 0
 	}
 
-	// if process_timer(&g.fall_timer) {
-	// 	// check next down position for collision: block or ground
-	// 	is_locked := false
-	// 	for &pos in sa.slice(&old_tetramino_positions) {
-	// 		tetra_type, in_bounds := get_tile(pos.x, pos.y + 1)
-	// 		if !in_bounds || tetra_type != .None {
-	// 			// locked: hit bottom or a locked block below
-	// 			// TODO: next_tetra routine: preview, spawn, eval_line_clear
-	// 			is_locked = true
-	// 			break
-	// 		} 
-	// 	}
-	// 	if !is_locked {
-	// 		// fall
-	// 		g.tetramino.layout_field_position.y += 1
-	// 	}
-	// 	interval_count += 1 // tmp
-	// }
+
+	// locked interlude processing
+	if g.tetramino.type == .None  {
+		// TODO: do on scene init
+		if is_timer_done(g.entry_delay_timer) {
+			reset_timer(&g.entry_delay_timer)
+
+			// shift playfield down
+			for y_to_clear in sa.slice(&g.lines_just_cleared_y_positions) {
+				// cleared_y_positions naturally ordered correctly
+				// starting from cleared_y_position - 1, copy into row below
+				for y := y_to_clear; y >= 1; y -= 1 {
+					g.playfield.blocks[y] = g.playfield.blocks[y-1]
+				}
+			}
+
+			if sa.len(g.lines_just_cleared_y_positions) > 0 {
+				sa.clear(&g.lines_just_cleared_y_positions)
+				g.show_lines_cleared_flash = false
+			}
+			// update next preview (randomizer)
+			// spawn preview block
+			spawn_tetramino(.T)
+
+			return
+		}
+		// animate lines_cleared state
+		if int(get_timer_accum(g.entry_delay_timer)) % LINE_CLEAR_ANIMATION_FRAME_INTERVAL == 0 {
+			g.show_lines_cleared_flash = !g.show_lines_cleared_flash
+		}
+		process_timer(&g.entry_delay_timer)
+	}
 
 	// move new tetra based on layout_field_pos delta
 	new_tetramino_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
 
-	clear(&g.block_render_data)
+	sa.clear(&g.block_render_data)
 	for row, field_y in g.playfield.blocks {
 		for block_type, field_x in row {
 
@@ -354,7 +360,7 @@ update :: proc() {
 				is_occupied_by_tetra := false
 				for tetra_field_pos in new_tetramino_positions {
 					if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
-						append(&g.block_render_data, Block_Render_Data{
+						sa.append(&g.block_render_data, Block_Render_Data{
 							x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
 							y = f32(field_y) * BLOCK_PIXEL_SIZE,
 							w = BLOCK_PIXEL_SIZE,
@@ -367,15 +373,33 @@ update :: proc() {
 				if is_occupied_by_tetra do continue
 			}
 
-			// playfield data
+			// playfield data and conditional render for animating cleared lines
 			if block_type != .None {
-				append(&g.block_render_data, Block_Render_Data{
-					x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-					y = f32(field_y) * BLOCK_PIXEL_SIZE,
-					w = BLOCK_PIXEL_SIZE,
-					h = BLOCK_PIXEL_SIZE,
-					color = init_block(block_type),
-				})
+				is_block_in_cleared_row := false
+				for y in sa.slice(&g.lines_just_cleared_y_positions) {
+					if i32(field_y) == y {
+						is_block_in_cleared_row = true
+						break
+					}
+				}
+
+				if !is_block_in_cleared_row || (is_block_in_cleared_row && g.show_lines_cleared_flash) {
+					sa.append(&g.block_render_data, Block_Render_Data{
+						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+						y = f32(field_y) * BLOCK_PIXEL_SIZE,
+						w = BLOCK_PIXEL_SIZE,
+						h = BLOCK_PIXEL_SIZE,
+						color = init_block(block_type),
+					})
+				} else if is_block_in_cleared_row && !g.show_lines_cleared_flash {
+					sa.append(&g.block_render_data, Block_Render_Data{
+						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+						y = f32(field_y) * BLOCK_PIXEL_SIZE,
+						w = BLOCK_PIXEL_SIZE,
+						h = BLOCK_PIXEL_SIZE,
+						color = LINE_CLEAR_FLASH_COLOR,
+					})
+				}
 			}
 		}
 	}
@@ -383,7 +407,7 @@ update :: proc() {
 
 draw :: proc() {
 	rl.BeginDrawing()
-	rl.ClearBackground(rl.GRAY)
+	rl.ClearBackground(BACKGROUND_COLOR)
 
 	rl.BeginMode2D(game_camera())
 	rl.DrawRectangle(0,0,PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY)
@@ -391,16 +415,21 @@ draw :: proc() {
 		PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
 		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY
 	)
-	for brd in g.block_render_data {
-		rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, rl.BLACK)
-		rl.DrawRectangleV({brd.x+1, brd.y+1}, {brd.w-2, brd.h-2}, brd.color)
+	for brd in sa.slice(&g.block_render_data) {
+			rl.DrawRectangleV({brd.x+1, brd.y+1}, {brd.w-2, brd.h-2}, brd.color)
+		if brd.color == LINE_CLEAR_FLASH_COLOR {
+			rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, brd.color)
+		} else {
+			rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, rl.BLACK)
+		}
 	}
 
-	// debug
-	for x in 0..<PLAYFIELD_BLOCK_W+1 {
-		for y in 0..<PLAYFIELD_BLOCK_H+1 {
-			rl.DrawLine(i32(x * BLOCK_PIXEL_SIZE + PLAYFIELD_BORDER_THICKNESS), 0, i32(x*BLOCK_PIXEL_SIZE +  PLAYFIELD_BORDER_THICKNESS), PLAYFIELD_BLOCK_H * BLOCK_PIXEL_SIZE, rl.BLUE)
-			rl.DrawLine( PLAYFIELD_BORDER_THICKNESS, i32(y * BLOCK_PIXEL_SIZE), PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE + PLAYFIELD_BORDER_THICKNESS, i32(y*BLOCK_PIXEL_SIZE), rl.BLUE)
+	if g.debug {
+		for x in 0..<PLAYFIELD_BLOCK_W+1 {
+			for y in 0..<PLAYFIELD_BLOCK_H+1 {
+				rl.DrawLine(i32(x * BLOCK_PIXEL_SIZE + PLAYFIELD_BORDER_THICKNESS), 0, i32(x*BLOCK_PIXEL_SIZE +  PLAYFIELD_BORDER_THICKNESS), PLAYFIELD_BLOCK_H * BLOCK_PIXEL_SIZE, rl.BLUE)
+				rl.DrawLine( PLAYFIELD_BORDER_THICKNESS, i32(y * BLOCK_PIXEL_SIZE), PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE + PLAYFIELD_BORDER_THICKNESS, i32(y*BLOCK_PIXEL_SIZE), rl.BLUE)
+			}
 		}
 	}
 	rl.EndMode2D()
@@ -445,14 +474,7 @@ input_map := [?]Input_Map_Entry{
 	{.Exit, .ESCAPE},
 }
 
-// when input pressed (and timer not running), start timer
-// when input pressed and timer running, dont input
 process_input :: proc(input: ^Input_Set) {
-	if g.input_delay.state == .Inactive {
-		start_timer(&g.input_delay)
-	}
-	process_timer(&g.input_delay)
-
 	// Read input
 	for entry in input_map {
 		switch entry.input {
@@ -461,51 +483,39 @@ process_input :: proc(input: ^Input_Set) {
 				input^ += {entry.input}
 			}
 
-		// Each time input is flagged corresponds to an effect (eg move action)
 		case .Left, .Right:
 			// check for input delay, could do this below but just hack it
 			if rl.IsKeyDown(entry.key) {
-				if !g.das {
-					input^ += {entry.input}
-					g.das = true
-				} else {
-					g.das_frames += 1
-					if g.das_frames > DAS_FRAMES {
-						g.das = false
-					}
-				}
-				if is_timer_done(g.input_delay) && !g.das {
+				process_timer(&g.input_delay)
+				process_timer(&g.input_repeat)
+
+				// Kickoff input delay timer
+				if g.input_delay.state == .Inactive && g.input_repeat.state != .Running {
 					input^ += {entry.input}
 					restart_timer(&g.input_delay)
 				}
-			}
 
+				// Kickoff input repeat timer, apply input once
+				if is_timer_done(g.input_delay) && g.input_repeat.state == .Inactive {
+					input^ += {entry.input}
+					start_timer(&g.input_repeat)
+				}
+
+				// Apply repeat input
+				if is_timer_done(g.input_repeat) {
+					input^ += {entry.input}
+					restart_timer(&g.input_repeat)
+				}
+			}
 			if rl.IsKeyReleased(entry.key) {
-				g.das = false
-				g.das_frames = 0
+				reset_timer(&g.input_delay)
+				reset_timer(&g.input_repeat)
 			}
 
 		// Down input is a flag, toggling super gravity
 		case .Down:
-			// check for input delay, could do this below but just hack it
 			if rl.IsKeyDown(entry.key) {
-				if !g.das {
-					input^ += {entry.input}
-					g.das = true
-				} else {
-					g.das_frames += 1
-					if g.das_frames > DAS_FRAMES {
-						g.das = false
-					}
-				}
-				if !g.das {
-					input^ += {entry.input}
-				}
-			}
-
-			if rl.IsKeyReleased(entry.key) {
-				g.das = false
-				g.das_frames = 0
+				input^ += {entry.input}
 			}
 		case .Rotate_CCW, .Rotate_CW:
 			if rl.IsKeyPressed(entry.key) {
@@ -513,6 +523,9 @@ process_input :: proc(input: ^Input_Set) {
 			}
 		}
 	}
+
+	// Apply some inputs here
+	if .Toggle_Debug in input do g.debug = !g.debug
 }
  
 // Run once: allocate, set global variable immutable values
@@ -536,27 +549,33 @@ setup :: proc() {
 	g^ = Game_Memory {
 		resman = resman,
 	}
+	g.input_repeat = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat")
+	g.input_delay = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_delay")
+	g.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 }
+
 // clear collections, set initial values
 init :: proc() {
 	g.game_state = .Play
 	g.debug = false
 	g.das = false
 	g.das_frames = 0
-	g.entry_frame_count = 0
-	g.entry_frame_total = ARE_FRAMES
+	set_timer_duration(&g.entry_delay_timer, ARE_FRAMES)
+	reset_timer(&g.entry_delay_timer)
+	g.tetramino = {}
+	g.score = 0
+	g.level = 0
+	g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
+	g.fall_frames = 0
+	g.show_lines_cleared_flash = false
+	g.lines_cleared_accum = 0
+	reset_timer(&g.input_delay)
+	reset_timer(&g.input_repeat)
 
+	sa.clear(&g.lines_just_cleared_y_positions)
+	sa.clear(&g.block_render_data)
 	clear_playfield()
-
-	// for y in 0..<PLAYFIELD_BLOCK_H {
-	// 	for x in 0..<PLAYFIELD_BLOCK_W {
-	// 		if ((y + 1) * PLAYFIELD_BLOCK_W + x) % 3 == 0 {
-	// 			g.tile_index.tiles[y][x] = .L
-	// 		}
-	// 	}
-	// }
-
-	g.input_delay = create_timer(0.1, .One_Shot, 1, "input_delay")
+	log.info("Initialization done.")
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -725,4 +744,21 @@ should_level_increase :: proc() -> bool {
 		return true
 	}
 	return false
+}
+
+eval_lines_cleared :: proc() -> sa.Small_Array(PLAYFIELD_BLOCK_H, i32) {
+	y_positions_cleared: sa.Small_Array(PLAYFIELD_BLOCK_H, i32)
+	for row, y in g.playfield.blocks {
+		is_continuous_blocks := true
+		for val in row {
+			if val == .None {
+				is_continuous_blocks = false
+				break
+			}
+		}
+		if is_continuous_blocks {
+			sa.append(&y_positions_cleared, i32(y))
+		}
+	}
+	return y_positions_cleared
 }

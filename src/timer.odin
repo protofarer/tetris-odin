@@ -3,20 +3,31 @@ package game
 import "core:fmt"
 import rl "vendor:raylib"
 
+// This is a frame-dependent timer, i.e. it works by calling it every frame. It cannot function as an independent timer for any absolute passage of time that occurs between timer calls. State is updated primarily by `process_timer`
+
+
 // TODO: timer system
 // is_active
 // is_loop
 // is_done
 
+// TODO: CSDR accepting dt instead of calling rl, make independent package
+
 Timer :: struct {
     id: string, // for debugging
     accum: f32,
-    duration: f32,
+    duration: f32, // CSDR union to include an integer for the Tick interval_type
     state: Timer_State,
     mode: Timer_Mode,
     iterations: int,
     remaining: int,
     on_complete: proc(),
+	interval_type: Interval_Type
+}
+
+Interval_Type :: enum {
+	Time,
+	Tick
 }
 
 Timer_State :: enum {
@@ -32,7 +43,7 @@ Timer_Mode :: enum {
     Countdown,
 }
 
-create_timer :: proc(duration: f32, mode: Timer_Mode = .One_Shot, iterations: int = 1, id: string = "") -> Timer {
+create_timer :: proc(duration: f32, mode: Timer_Mode = .One_Shot, interval_type: Interval_Type = .Time, iterations: int = 1, id: string = "") -> Timer {
     timer := Timer{
         id = id,
         duration = duration,
@@ -41,6 +52,7 @@ create_timer :: proc(duration: f32, mode: Timer_Mode = .One_Shot, iterations: in
         mode = mode,
         iterations = iterations,
         remaining = iterations,
+		interval_type = interval_type,
     }
     return timer
 }
@@ -88,7 +100,11 @@ process_timer :: proc(timer: ^Timer) -> bool {
         return false
     }
 
-    timer.accum -= rl.GetFrameTime()
+	if timer.interval_type == .Time {
+		timer.accum -= rl.GetFrameTime()
+	} else if timer.interval_type == .Tick {
+		timer.accum -= 1
+	}
 
     if timer.accum <= 0 {
         if timer.on_complete != nil {
@@ -147,4 +163,12 @@ debug_timer :: proc(timer: Timer) {
 
 is_timer_running :: proc(timer: Timer) -> bool {
     return timer.state == .Running
+}
+
+set_timer_duration :: proc(timer: ^Timer, duration: f32) {
+	timer.duration = duration
+}
+
+get_timer_accum :: proc(timer: Timer) -> f32 {
+	return timer.accum
 }
