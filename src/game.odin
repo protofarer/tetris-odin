@@ -13,18 +13,25 @@ Vec2 :: [2]f32
 Vec2i :: [2]i32
 Position :: Vec2i
 
-BACKGROUND_COLOR :: rl.LIGHTGRAY
+WINDOW_W :: 720
+WINDOW_H :: 720
+TICK_RATE :: 60
+
 PIXEL_WINDOW_HEIGHT :: 180
+
+BACKGROUND_COLOR :: rl.LIGHTGRAY
+
 PLAYFIELD_BLOCK_H :: 18
 PLAYFIELD_BLOCK_W :: 10
 PLAYFIELD_BORDER_THICKNESS :: 10
 BLOCK_PIXEL_SIZE :: PIXEL_WINDOW_HEIGHT / PLAYFIELD_BLOCK_H
 
-INITIAL_FALL_INTERVAL :: 1 // sec
+PANEL_X :: PLAYFIELD_BORDER_THICKNESS * 2 + (PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE)
+PANEL_Y :: 0
+PANEL_WIDTH :: WINDOW_W - PANEL_X
+PANEL_HEIGHT :: WINDOW_H
 
-WINDOW_W :: 720
-WINDOW_H :: 720
-TICK_RATE :: 60
+INITIAL_FALL_INTERVAL :: 1 // sec
 
 DAS_FRAMES :: 23
 ARR_FRAMES :: 9 // TODO: replace delay_timer
@@ -85,16 +92,9 @@ Game_Memory :: struct {
 
 	fall_frames: i32,
 
-	das: bool, // Delayed Auto Shift
-	das_frames: i32,
-
 	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
 	show_lines_cleared_flash: bool,
-
 	lines_cleared_accum: i32,
-
-	// entry_frame_count: i32, // entry delay aka ARE
-	// entry_frame_total: i32,
 	entry_delay_timer: Timer,
 
 	level_drop_rate: i32,
@@ -410,11 +410,15 @@ draw :: proc() {
 	rl.ClearBackground(BACKGROUND_COLOR)
 
 	rl.BeginMode2D(game_camera())
-	rl.DrawRectangle(0,0,PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY)
+
+	// Borders
+	rl.DrawRectangle(0,0,PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE)
 	rl.DrawRectangle(
 		PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
-		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.DARKGRAY
+		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE
 	)
+
+	// Playfield
 	for brd in sa.slice(&g.block_render_data) {
 			rl.DrawRectangleV({brd.x+1, brd.y+1}, {brd.w-2, brd.h-2}, brd.color)
 		if brd.color == LINE_CLEAR_FLASH_COLOR {
@@ -424,6 +428,29 @@ draw :: proc() {
 		}
 	}
 
+	// Panel
+	rl.DrawRectangleV({PANEL_X, PANEL_Y}, {PANEL_WIDTH, PANEL_HEIGHT}, rl.DARKGRAY)
+
+	SCORE_LABEL_POS :: Vec2i{PANEL_X + 5, 5}
+	SCORE_VALUE_POS :: Vec2i{SCORE_LABEL_POS.x, SCORE_LABEL_POS.y + 15}
+	rl.DrawText("SCORE", SCORE_LABEL_POS.x, SCORE_LABEL_POS.y, 11, rl.GREEN)
+	rl.DrawText(fmt.ctprint(g.score), SCORE_VALUE_POS.x, SCORE_VALUE_POS.y, 11, rl.GREEN)
+
+	LEVEL_LABEL_POS :: Vec2i{PANEL_X + 5, 50}
+	LEVEL_VALUE_POS :: Vec2i{LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y + 10}
+	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 11, rl.GREEN)
+	rl.DrawText(fmt.ctprint(g.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 11, rl.GREEN)
+
+	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 75}
+	LINES_VALUE_POS :: Vec2i{LINES_LABEL_POS.x, LINES_LABEL_POS.y + 10}
+	rl.DrawText("LINES", LINES_LABEL_POS.x, LINES_LABEL_POS.y, 11, rl.GREEN)
+	rl.DrawText(fmt.ctprint(g.lines_cleared_accum), LINES_VALUE_POS.x, LINES_VALUE_POS.y, 11, rl.GREEN)
+
+	PREVIEW_BOX_POS :: Vec2{PANEL_X + 5, 110}
+	PREVIEW_BOX_SIZE :: Vec2{50,50}
+	rl.DrawRectangleV(PREVIEW_BOX_POS, PREVIEW_BOX_SIZE, rl.GREEN)
+
+	// Debug
 	if g.debug {
 		for x in 0..<PLAYFIELD_BLOCK_W+1 {
 			for y in 0..<PLAYFIELD_BLOCK_H+1 {
@@ -561,8 +588,6 @@ setup :: proc() {
 init :: proc() {
 	g.game_state = .Play
 	g.debug = false
-	g.das = false
-	g.das_frames = 0
 	set_timer_duration(&g.entry_delay_timer, ARE_FRAMES)
 	reset_timer(&g.entry_delay_timer)
 	g.tetramino = {}
