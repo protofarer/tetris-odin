@@ -20,7 +20,7 @@ TICK_RATE :: 60
 
 PIXEL_WINDOW_HEIGHT :: 180
 
-BACKGROUND_COLOR :: rl.LIGHTGRAY
+BACKGROUND_COLOR :: rl.Color{142,142,142,255}
 
 PLAYFIELD_BLOCK_H :: 18
 PLAYFIELD_BLOCK_W :: 10
@@ -429,13 +429,12 @@ draw :: proc() {
 	tex_bg := get_texture(.Background)
 	src := rl.Rectangle{0, 0, f32(tex_bg.width), f32(tex_bg.height)}
 	dst := rl.Rectangle{0, 0, WINDOW_W, WINDOW_H}
-	rl.DrawTexturePro(tex_bg, src, dst, {}, 0, rl.RAYWHITE)
+	rl.DrawTexturePro(tex_bg, src, dst, {}, 0, rl.Color{147,210,255,255})
 
 	rl.BeginMode2D(game_camera())
 
 
 	// Borders
-
 	rl.DrawRectangle(0,0,
 		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, 
 		rl.GRAY
