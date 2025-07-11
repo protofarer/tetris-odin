@@ -2,6 +2,7 @@ package game
 
 import "core:fmt"
 import "core:log"
+import "core:math/rand"
 import rl "vendor:raylib"
 import sa "core:container/small_array"
 
@@ -98,12 +99,17 @@ Game_Memory :: struct {
 	entry_delay_timer: Timer,
 
 	level_drop_rate: i32,
+
+	// For randomizer, reroll if 1st roll results in same previous tetra
+	previous_tetra_type: Tetramino_Type,
+	preview_tetra: Tetramino,
 }
 
 Block_Render_Data :: struct {
 	x,y: f32,
 	w,h: f32,
 	color: rl.Color,
+	border_color: rl.Color,
 }
 
 Playfield :: struct {
@@ -142,16 +148,22 @@ ui_camera :: proc() -> rl.Camera2D {
 	}
 }
 
+init_tetra :: proc(tetra: ^Tetramino, type: Tetramino_Type) {
+	tetra^ = Tetramino{
+		type = type,
+		layout = get_layout(type, 0),
+		layout_field_position = {3,0},
+		color = get_tetra_color(type),
+	}
+}
+
 spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
 	if g.tetramino.type != .None {
 		log.error("Cannot spawn tetramino when one currently exists")
 		return
 	}
-	t := Tetramino{
-		type = type,
-		layout = get_layout(type, 0),
-		layout_field_position = {3,0},
-	}
+	t: Tetramino
+	init_tetra(&t, type)
 	g.tetramino = t
 	g.fall_frames = 0 // reset fall "timer"
 }
@@ -277,6 +289,8 @@ update :: proc() {
 				set_playfield_block(pos.x, pos.y, g.tetramino.type)
 			}
 
+			g.previous_tetra_type = g.tetramino.type
+
 			// null g.tetra
 			// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
 			g.tetramino = {
@@ -285,9 +299,9 @@ update :: proc() {
 
 			y_positions_cleared := eval_lines_cleared()
 			n_lines_cleared := i32(sa.len(y_positions_cleared))
+			g.lines_cleared_accum += n_lines_cleared
 			set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
 			restart_timer(&g.entry_delay_timer)
-			g.lines_cleared_accum += n_lines_cleared
 			g.lines_just_cleared_y_positions = y_positions_cleared
 
 			// TODO: lines cleared animation
@@ -298,16 +312,7 @@ update :: proc() {
 			// update score
 			if n_lines_cleared > 0 {
 				g.score += calc_points(g.level, n_lines_cleared)
-
-				if should_level_increase() {
-					g.level += 1
-					g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
-					// TODO: increase speed
-				}
 			}
-
-			// TODO: randomizer and preview block
-
 		} else {
 			// fall
 			g.tetramino.layout_field_position.y += 1
@@ -322,6 +327,11 @@ update :: proc() {
 		if is_timer_done(g.entry_delay_timer) {
 			reset_timer(&g.entry_delay_timer)
 
+			if should_level_increase() {
+				g.level += 1
+				g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
+			}
+
 			// shift playfield down
 			for y_to_clear in sa.slice(&g.lines_just_cleared_y_positions) {
 				// cleared_y_positions naturally ordered correctly
@@ -333,11 +343,14 @@ update :: proc() {
 
 			if sa.len(g.lines_just_cleared_y_positions) > 0 {
 				sa.clear(&g.lines_just_cleared_y_positions)
-				g.show_lines_cleared_flash = false
+				g.show_lines_cleared_flash = true
 			}
-			// update next preview (randomizer)
-			// spawn preview block
-			spawn_tetramino(.T)
+
+			// spawn with preview tetra
+			spawn_tetramino(g.preview_tetra.type)
+
+			// update next preview tetra
+			update_preview_tetra()
 
 			return
 		}
@@ -365,7 +378,8 @@ update :: proc() {
 							y = f32(field_y) * BLOCK_PIXEL_SIZE,
 							w = BLOCK_PIXEL_SIZE,
 							h = BLOCK_PIXEL_SIZE,
-							color = init_block(g.tetramino.type),
+							color = get_tetra_color(g.tetramino.type),
+							border_color = rl.BLACK,
 						})
 						is_occupied_by_tetra = true
 					}
@@ -389,7 +403,8 @@ update :: proc() {
 						y = f32(field_y) * BLOCK_PIXEL_SIZE,
 						w = BLOCK_PIXEL_SIZE,
 						h = BLOCK_PIXEL_SIZE,
-						color = init_block(block_type),
+						color = get_tetra_color(block_type),
+						border_color = rl.BLACK,
 					})
 				} else if is_block_in_cleared_row && !g.show_lines_cleared_flash {
 					sa.append(&g.block_render_data, Block_Render_Data{
@@ -398,6 +413,7 @@ update :: proc() {
 						w = BLOCK_PIXEL_SIZE,
 						h = BLOCK_PIXEL_SIZE,
 						color = LINE_CLEAR_FLASH_COLOR,
+						border_color = LINE_CLEAR_FLASH_COLOR,
 					})
 				}
 			}
@@ -418,14 +434,9 @@ draw :: proc() {
 		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE
 	)
 
-	// Playfield
+	// Playfield + Tetra
 	for brd in sa.slice(&g.block_render_data) {
-			rl.DrawRectangleV({brd.x+1, brd.y+1}, {brd.w-2, brd.h-2}, brd.color)
-		if brd.color == LINE_CLEAR_FLASH_COLOR {
-			rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, brd.color)
-		} else {
-			rl.DrawRectangleLinesEx({brd.x ,brd.y, brd.w, brd.h}, 1, rl.BLACK)
-		}
+		draw_block(brd.x, brd.y, brd.w, brd.h, brd.color, brd.border_color)
 	}
 
 	// Panel
@@ -450,6 +461,21 @@ draw :: proc() {
 	PREVIEW_BOX_SIZE :: Vec2{50,50}
 	rl.DrawRectangleV(PREVIEW_BOX_POS, PREVIEW_BOX_SIZE, rl.GREEN)
 
+	for row, y in g.preview_tetra.layout {
+		for val, x in row {
+			if val != 0 {
+				draw_block(
+					f32(PREVIEW_BOX_POS.x) + f32(x) * BLOCK_PIXEL_SIZE, 
+					f32(PREVIEW_BOX_POS.y) + f32(y) * BLOCK_PIXEL_SIZE, 
+					BLOCK_PIXEL_SIZE, 
+					BLOCK_PIXEL_SIZE, 
+					g.preview_tetra.color,
+					rl.BLACK,
+				)
+			}
+		}
+	}
+
 	// Debug
 	if g.debug {
 		for x in 0..<PLAYFIELD_BLOCK_W+1 {
@@ -462,7 +488,7 @@ draw :: proc() {
 	rl.EndMode2D()
 
 	rl.BeginMode2D(ui_camera())
-		rl.DrawText(fmt.ctprintf("layout_pos: %v", g.tetramino.layout_field_position), 5, 5, 10, rl.WHITE)
+		rl.DrawText(fmt.ctprintf("layout_pos: %v\nlevel_drop_rate: %v", g.tetramino.layout_field_position, g.level_drop_rate), 5, 5, 10, rl.WHITE)
 	rl.EndMode2D()
 
 	rl.EndDrawing()
@@ -595,7 +621,7 @@ init :: proc() {
 	g.level = 0
 	g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
 	g.fall_frames = 0
-	g.show_lines_cleared_flash = false
+	g.show_lines_cleared_flash = true
 	g.lines_cleared_accum = 0
 	reset_timer(&g.input_delay_timer)
 	reset_timer(&g.input_repeat_timer)
@@ -604,6 +630,10 @@ init :: proc() {
 	sa.clear(&g.block_render_data)
 	clear_playfield()
 	log.info("Initialization done.")
+
+	update_preview_tetra()
+	starting_tetra_type := randomize_tetra_type()
+	spawn_tetramino(starting_tetra_type)
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -638,7 +668,6 @@ game_init :: proc() {
 	log.info("Initializing game...")
 	setup() // run once
 	init() // run after setup, then on reset
-	spawn_tetramino(.T, {})
 
 	game_hot_reloaded(g)
 }
@@ -718,7 +747,7 @@ is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
 }
 
-init_block :: proc(type: Tetramino_Type) -> rl.Color {
+get_tetra_color :: proc(type: Tetramino_Type) -> rl.Color {
 	color: rl.Color
 	switch type {
 	case .None:
@@ -768,7 +797,7 @@ calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
 }
 
 should_level_increase :: proc() -> bool {
-	if g.lines_cleared_accum > g.level * LINES_PER_LEVEL && g.lines_cleared_accum % LINES_PER_LEVEL == 0 {
+	if (g.lines_cleared_accum == (g.level + 1) * LINES_PER_LEVEL) {
 		return true
 	}
 	return false
@@ -789,4 +818,57 @@ eval_lines_cleared :: proc() -> sa.Small_Array(PLAYFIELD_BLOCK_H, i32) {
 		}
 	}
 	return y_positions_cleared
+}
+
+randomize_tetra_type :: proc() -> Tetramino_Type {
+	tetra_type := roll_eight()
+	if tetra_type == .None || tetra_type == g.preview_tetra.type {
+		tetra_type = roll_seven()
+	}
+	return tetra_type
+}
+
+START_TETRA_CHOICE := [?]Tetramino_Type{
+	.I, .J, .L, .T
+}
+
+ALL_TETRA_CHOICE := [?]Tetramino_Type{
+	.I, .J, .L, .T, .S, .Z, .O
+}
+
+// Can return .None
+roll_eight :: proc() -> Tetramino_Type {
+	return rand.choice_enum(Tetramino_Type)
+}
+
+// Always returns a tetra
+roll_seven :: proc() -> Tetramino_Type {
+	tetra_type := rand.choice(ALL_TETRA_CHOICE[:])
+	return tetra_type
+}
+
+// never deals an S, Z or O as the first piece, to avoid a forced overhang (S,Z) and give flexibility (O)
+roll_start_game :: proc() -> Tetramino_Type {
+	tetra_type := rand.choice(START_TETRA_CHOICE[:])
+	return tetra_type
+}
+
+draw_block :: proc(x,y,w,h: f32, fill_color, border_color: rl.Color) {
+	draw_block_fill(x,y,w,h,fill_color)
+	draw_block_border(x,y,w,h,border_color)
+}
+
+draw_block_fill :: proc(x, y, w, h: f32, color: rl.Color) {
+	rl.DrawRectangleV({x+1, y+1}, {w-2, h-2}, color)
+}
+
+draw_block_border :: proc(x, y, w, h: f32, color: rl.Color) {
+		rl.DrawRectangleLinesEx({x ,y, w, h}, 1, color)
+}
+
+update_preview_tetra :: proc() {
+	tetra_type := randomize_tetra_type()
+	tetra: Tetramino
+	init_tetra(&tetra, tetra_type)
+	g.preview_tetra = tetra
 }

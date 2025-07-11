@@ -1,5 +1,6 @@
 package game
 import sa "core:container/small_array"
+import rl "vendor:raylib"
 
 N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
 TETRAMINO_BLOCKS_PER_LAYOUT :: 4
@@ -9,6 +10,7 @@ Tetramino :: struct {
 	layout: Tetramino_Layout,
 	layout_idx: int,
 	layout_field_position: Position,
+	color: rl.Color,
 }
 
 Tetramino_Type :: enum {
@@ -54,6 +56,150 @@ init_layout_tables :: proc() {
 		{0,1,0,0},
 		{0,1,1,0},
 		{0,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.I], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,1,1},
+		{0,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.I], Tetramino_Layout{
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,1,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.I], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,1,1},
+		{0,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.I], Tetramino_Layout{
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,1,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.O], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.O], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.O], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.O], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.J], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,1,0},
+		{0,0,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.J], Tetramino_Layout{
+		{0,1,0,0},
+		{0,1,0,0},
+		{1,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.J], Tetramino_Layout{
+		{1,0,0,0},
+		{1,1,1,0},
+		{0,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.J], Tetramino_Layout{
+		{0,1,1,0},
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.L], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,1,0},
+		{1,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.L], Tetramino_Layout{
+		{1,1,0,0},
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.L], Tetramino_Layout{
+		{0,0,1,0},
+		{1,1,1,0},
+		{0,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.L], Tetramino_Layout{
+		{0,1,0,0},
+		{0,1,0,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.S], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{1,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.S], Tetramino_Layout{
+		{1,0,0,0},
+		{1,1,0,0},
+		{0,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.S], Tetramino_Layout{
+		{0,0,0,0},
+		{0,1,1,0},
+		{1,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.S], Tetramino_Layout{
+		{1,0,0,0},
+		{1,1,0,0},
+		{0,1,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.Z], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,0,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.Z], Tetramino_Layout{
+		{0,1,0,0},
+		{1,1,0,0},
+		{1,0,0,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.Z], Tetramino_Layout{
+		{0,0,0,0},
+		{1,1,0,0},
+		{0,1,1,0},
+		{0,0,0,0},
+	})
+	sa.append(&LAYOUT_TABLES[.Z], Tetramino_Layout{
+		{0,1,0,0},
+		{1,1,0,0},
+		{1,0,0,0},
 		{0,0,0,0},
 	})
 }
