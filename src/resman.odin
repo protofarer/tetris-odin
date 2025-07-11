@@ -24,6 +24,8 @@ Resource_Manager :: struct {
 
 Texture_ID :: enum {
     Player,
+	Background,
+	Border,
 }
 
 Sound_ID :: enum { 

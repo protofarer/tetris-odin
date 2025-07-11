@@ -87,8 +87,8 @@ Game_Memory :: struct {
 	score: i32,
 
 	block_render_data: sa.Small_Array(PLAYFIELD_BLOCK_W * PLAYFIELD_BLOCK_H, Block_Render_Data),
-	input_delay_timer: Timer,
-	input_repeat_timer: Timer,
+	input_repeat_delay_timer: Timer, // DAS
+	input_repeat_timer: Timer, // ARR
 	input: Input_Set,
 
 	fall_frames: i32,
@@ -96,7 +96,7 @@ Game_Memory :: struct {
 	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
 	show_lines_cleared_flash: bool,
 	lines_cleared_accum: i32,
-	entry_delay_timer: Timer,
+	entry_delay_timer: Timer, // ARE
 
 	level_drop_rate: i32,
 
@@ -153,7 +153,7 @@ init_tetra :: proc(tetra: ^Tetramino, type: Tetramino_Type) {
 		type = type,
 		layout = get_layout(type, 0),
 		layout_field_position = {3,0},
-		color = get_tetra_color(type),
+		color = TETRA_COLORS[type],
 	}
 }
 
@@ -299,7 +299,6 @@ update :: proc() {
 
 			y_positions_cleared := eval_lines_cleared()
 			n_lines_cleared := i32(sa.len(y_positions_cleared))
-			g.lines_cleared_accum += n_lines_cleared
 			set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
 			restart_timer(&g.entry_delay_timer)
 			g.lines_just_cleared_y_positions = y_positions_cleared
@@ -323,10 +322,12 @@ update :: proc() {
 
 	// locked interlude processing
 	if g.tetramino.type == .None  {
-		// TODO: do on scene init
 		if is_timer_done(g.entry_delay_timer) {
 			reset_timer(&g.entry_delay_timer)
 
+			n_lines_cleared := sa.len(g.lines_just_cleared_y_positions)
+			g.lines_cleared_accum += i32(n_lines_cleared)
+			// update lines_cleared and preview here
 			if should_level_increase() {
 				g.level += 1
 				g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
@@ -378,7 +379,7 @@ update :: proc() {
 							y = f32(field_y) * BLOCK_PIXEL_SIZE,
 							w = BLOCK_PIXEL_SIZE,
 							h = BLOCK_PIXEL_SIZE,
-							color = get_tetra_color(g.tetramino.type),
+							color = TETRA_COLORS[g.tetramino.type],
 							border_color = rl.BLACK,
 						})
 						is_occupied_by_tetra = true
@@ -403,7 +404,7 @@ update :: proc() {
 						y = f32(field_y) * BLOCK_PIXEL_SIZE,
 						w = BLOCK_PIXEL_SIZE,
 						h = BLOCK_PIXEL_SIZE,
-						color = get_tetra_color(block_type),
+						color = TETRA_COLORS[block_type],
 						border_color = rl.BLACK,
 					})
 				} else if is_block_in_cleared_row && !g.show_lines_cleared_flash {
@@ -425,14 +426,41 @@ draw :: proc() {
 	rl.BeginDrawing()
 	rl.ClearBackground(BACKGROUND_COLOR)
 
+	tex_bg := get_texture(.Background)
+	src := rl.Rectangle{0, 0, f32(tex_bg.width), f32(tex_bg.height)}
+	dst := rl.Rectangle{0, 0, WINDOW_W, WINDOW_H}
+	rl.DrawTexturePro(tex_bg, src, dst, {}, 0, rl.RAYWHITE)
+
 	rl.BeginMode2D(game_camera())
 
+
 	// Borders
-	rl.DrawRectangle(0,0,PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE)
+
+	rl.DrawRectangle(0,0,
+		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, 
+		rl.GRAY
+	)
+	tex_border := get_texture(.Border)
+	src_border := rl.Rectangle{0, 0, f32(tex_border.width), f32(tex_border.height)}
+	dst_border := rl.Rectangle{0, 0, PLAYFIELD_BORDER_THICKNESS, PIXEL_WINDOW_HEIGHT}
+	rl.DrawTexturePro(tex_border, src_border, dst_border, {}, 0, rl.RAYWHITE)
+
 	rl.DrawRectangle(
 		PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
-		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE
+		PLAYFIELD_BORDER_THICKNESS, WINDOW_H, 
+		rl.GRAY
 	)
+	dst_border_2 := rl.Rectangle{
+		PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 
+		0, 
+		PLAYFIELD_BORDER_THICKNESS, 
+		PIXEL_WINDOW_HEIGHT
+	}
+	rl.DrawTexturePro(tex_border, src_border, dst_border_2, {}, 0, rl.RAYWHITE)
+	// rl.DrawRectangle(
+	// 	PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
+	// 	PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE
+	// )
 
 	// Playfield + Tetra
 	for brd in sa.slice(&g.block_render_data) {
@@ -440,26 +468,39 @@ draw :: proc() {
 	}
 
 	// Panel
-	rl.DrawRectangleV({PANEL_X, PANEL_Y}, {PANEL_WIDTH, PANEL_HEIGHT}, rl.DARKGRAY)
+	rl.DrawRectangleV({PANEL_X, PANEL_Y}, {PANEL_WIDTH, PANEL_HEIGHT}, rl.Color{30,30,30, 128})
 
 	SCORE_LABEL_POS :: Vec2i{PANEL_X + 5, 5}
 	SCORE_VALUE_POS :: Vec2i{SCORE_LABEL_POS.x, SCORE_LABEL_POS.y + 15}
-	rl.DrawText("SCORE", SCORE_LABEL_POS.x, SCORE_LABEL_POS.y, 11, rl.GREEN)
-	rl.DrawText(fmt.ctprint(g.score), SCORE_VALUE_POS.x, SCORE_VALUE_POS.y, 11, rl.GREEN)
+
+	score_rect := rl.Rectangle{f32(SCORE_LABEL_POS.x-3), f32(SCORE_LABEL_POS.y-3), 45, 30}
+	rl.DrawRectangleRounded(score_rect, 0.1, 3, rl.WHITE)
+	// DrawRectangleRounded(rec: Rectangle, roundness: f32, segments: c.int, color: Color)
+	// rl.DrawRectangle(SCORE_LABEL_POS.x-3, SCORE_LABEL_POS.y-3, 45, 30, rl.WHITE)
+	rl.DrawText("SCORE", SCORE_LABEL_POS.x, SCORE_LABEL_POS.y, 9, rl.BLACK)
+	rl.DrawText(fmt.ctprint(g.score), SCORE_VALUE_POS.x, SCORE_VALUE_POS.y, 10, rl.BLACK)
 
 	LEVEL_LABEL_POS :: Vec2i{PANEL_X + 5, 50}
 	LEVEL_VALUE_POS :: Vec2i{LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y + 10}
-	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 11, rl.GREEN)
-	rl.DrawText(fmt.ctprint(g.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 11, rl.GREEN)
+	level_rect := rl.Rectangle{f32(LEVEL_LABEL_POS.x-3), f32(LEVEL_LABEL_POS.y-3), 45, 23}
+	rl.DrawRectangleRounded(level_rect, 0.1, 3, rl.WHITE)
+	// rl.DrawRectangle(LEVEL_LABEL_POS.x-3, LEVEL_LABEL_POS.y-3, 45, 23, rl.WHITE)
+	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 10, rl.BLACK)
+	rl.DrawText(fmt.ctprint(g.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 10, rl.BLACK)
 
-	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 75}
+	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 80}
 	LINES_VALUE_POS :: Vec2i{LINES_LABEL_POS.x, LINES_LABEL_POS.y + 10}
-	rl.DrawText("LINES", LINES_LABEL_POS.x, LINES_LABEL_POS.y, 11, rl.GREEN)
-	rl.DrawText(fmt.ctprint(g.lines_cleared_accum), LINES_VALUE_POS.x, LINES_VALUE_POS.y, 11, rl.GREEN)
+	lines_rect := rl.Rectangle{f32(LINES_LABEL_POS.x-3), f32(LINES_LABEL_POS.y-3), 45, 23}
+	rl.DrawRectangleRounded(lines_rect, 0.1, 3, rl.WHITE)
+	// rl.DrawRectangle(LINES_LABEL_POS.x-3, LINES_LABEL_POS.y-3, 45, 23, rl.WHITE)
+	rl.DrawText("LINES", LINES_LABEL_POS.x, LINES_LABEL_POS.y, 10, rl.BLACK)
+	rl.DrawText(fmt.ctprint(g.lines_cleared_accum), LINES_VALUE_POS.x, LINES_VALUE_POS.y, 10, rl.BLACK)
 
 	PREVIEW_BOX_POS :: Vec2{PANEL_X + 5, 110}
 	PREVIEW_BOX_SIZE :: Vec2{50,50}
-	rl.DrawRectangleV(PREVIEW_BOX_POS, PREVIEW_BOX_SIZE, rl.GREEN)
+	preview_rect := rl.Rectangle{f32(PREVIEW_BOX_POS.x-3), f32(PREVIEW_BOX_POS.y-3), PREVIEW_BOX_SIZE.x, PREVIEW_BOX_SIZE.y}
+	rl.DrawRectangleRounded(preview_rect, 0.1, 3, rl.WHITE)
+	// rl.DrawRectangleV(PREVIEW_BOX_POS, PREVIEW_BOX_SIZE, rl.RAYWHITE)
 
 	for row, y in g.preview_tetra.layout {
 		for val, x in row {
@@ -539,42 +580,12 @@ process_input :: proc(input: ^Input_Set) {
 				input^ += {entry.input}
 			}
 
-		case .Left, .Right:
-			// check for input delay, could do this below but just hack it
-			if rl.IsKeyDown(entry.key) {
-				process_timer(&g.input_delay_timer)
-				process_timer(&g.input_repeat_timer)
-
-				// Kickoff input delay timer
-				if g.input_delay_timer.state == .Inactive && g.input_repeat_timer.state != .Running {
-					input^ += {entry.input}
-					restart_timer(&g.input_delay_timer)
-				}
-
-				// Kickoff input repeat timer, apply input once
-				if is_timer_done(g.input_delay_timer) && g.input_repeat_timer.state == .Inactive {
-					input^ += {entry.input}
-					start_timer(&g.input_repeat_timer)
-				}
-
-				// Apply repeat input
-				if is_timer_done(g.input_repeat_timer) {
-					input^ += {entry.input}
-					restart_timer(&g.input_repeat_timer)
-				}
-			}
-			if rl.IsKeyReleased(entry.key) {
-				reset_timer(&g.input_delay_timer)
-				reset_timer(&g.input_repeat_timer)
-			}
+		case .Left, .Right, .Rotate_CCW, .Rotate_CW:
+			delay_and_repeat_input(input, entry.key, entry.input)
 
 		// Down input is a flag, toggling super gravity
 		case .Down:
 			if rl.IsKeyDown(entry.key) {
-				input^ += {entry.input}
-			}
-		case .Rotate_CCW, .Rotate_CW:
-			if rl.IsKeyPressed(entry.key) {
 				input^ += {entry.input}
 			}
 		}
@@ -606,7 +617,7 @@ setup :: proc() {
 		resman = resman,
 	}
 	g.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
-	g.input_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_delay_timer")
+	g.input_repeat_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_repeat_delay_timer")
 	g.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 }
 
@@ -623,7 +634,7 @@ init :: proc() {
 	g.fall_frames = 0
 	g.show_lines_cleared_flash = true
 	g.lines_cleared_accum = 0
-	reset_timer(&g.input_delay_timer)
+	reset_timer(&g.input_repeat_delay_timer)
 	reset_timer(&g.input_repeat_timer)
 
 	sa.clear(&g.lines_just_cleared_y_positions)
@@ -632,7 +643,7 @@ init :: proc() {
 	log.info("Initialization done.")
 
 	update_preview_tetra()
-	starting_tetra_type := randomize_tetra_type()
+	starting_tetra_type := roll_start_game()
 	spawn_tetramino(starting_tetra_type)
 }
 
@@ -747,29 +758,6 @@ is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
 }
 
-get_tetra_color :: proc(type: Tetramino_Type) -> rl.Color {
-	color: rl.Color
-	switch type {
-	case .None:
-		color = rl.BLANK
-	case .I:
-		color = rl.YELLOW
-	case .J:
-		color = rl.PINK
-	case .L:
-		color = rl.PURPLE
-	case .Z:
-		color = rl.ORANGE
-	case .S:
-		color = rl.YELLOW
-	case .T:
-		color = rl.BLUE
-	case .O:
-		color = rl.GREEN
-	}
-	return color
-}
-
 clear_playfield :: proc() {
 	for y in 0..<PLAYFIELD_BLOCK_H {
 		for x in 0..<PLAYFIELD_BLOCK_W {
@@ -787,17 +775,16 @@ get_current_frames_per_row :: proc(table: []i32, level: i32) -> i32 {
 }
 
 calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
-	idx: int
-	if n_lines_cleared > 3 {
-		idx = 3
+	if n_lines_cleared <= 3 {
+		idx := int(n_lines_cleared) - 1
+		return POINTS_TABLE[idx] * (level + 1)
 	} else {
-		idx = int(n_lines_cleared) - 1
-	}
-	return POINTS_TABLE[idx] * (level + 1)
+		return POINTS_TABLE[3] * (level + 1)
+	} 
 }
 
 should_level_increase :: proc() -> bool {
-	if (g.lines_cleared_accum == (g.level + 1) * LINES_PER_LEVEL) {
+	if (g.lines_cleared_accum >= (g.level + 1) * LINES_PER_LEVEL) {
 		return true
 	}
 	return false
@@ -849,8 +836,11 @@ roll_seven :: proc() -> Tetramino_Type {
 
 // never deals an S, Z or O as the first piece, to avoid a forced overhang (S,Z) and give flexibility (O)
 roll_start_game :: proc() -> Tetramino_Type {
-	tetra_type := rand.choice(START_TETRA_CHOICE[:])
-	return tetra_type
+	for {
+		if t := rand.choice(START_TETRA_CHOICE[:]); t != g.preview_tetra.type {
+			return t
+		}
+	}
 }
 
 draw_block :: proc(x,y,w,h: f32, fill_color, border_color: rl.Color) {
@@ -859,7 +849,13 @@ draw_block :: proc(x,y,w,h: f32, fill_color, border_color: rl.Color) {
 }
 
 draw_block_fill :: proc(x, y, w, h: f32, color: rl.Color) {
+	// Body
 	rl.DrawRectangleV({x+1, y+1}, {w-2, h-2}, color)
+	// Highlight
+	rl.DrawPixel(i32(x+1), i32(y+1), rl.RAYWHITE) // point
+
+	rl.DrawRectangleV({x+2, y+2}, {2, 2}, rl.RAYWHITE) // edge
+	rl.DrawPixel(i32(x+2+1), i32(y+2+1), color) // block out
 }
 
 draw_block_border :: proc(x, y, w, h: f32, color: rl.Color) {
@@ -871,4 +867,33 @@ update_preview_tetra :: proc() {
 	tetra: Tetramino
 	init_tetra(&tetra, tetra_type)
 	g.preview_tetra = tetra
+}
+
+delay_and_repeat_input :: proc(input_set: ^Input_Set, key: rl.KeyboardKey, input: Input) {
+	if rl.IsKeyDown(key) {
+		process_timer(&g.input_repeat_delay_timer)
+		process_timer(&g.input_repeat_timer)
+
+		// Kickoff input delay timer
+		if g.input_repeat_delay_timer.state == .Inactive && g.input_repeat_timer.state != .Running {
+			input_set^ += {input}
+			restart_timer(&g.input_repeat_delay_timer)
+		}
+
+		// Kickoff input repeat timer, apply input once
+		if is_timer_done(g.input_repeat_delay_timer) && g.input_repeat_timer.state == .Inactive {
+			input_set^ += {input}
+			start_timer(&g.input_repeat_timer)
+		}
+
+		// Apply repeat input
+		if is_timer_done(g.input_repeat_timer) {
+			input_set^ += {input}
+			restart_timer(&g.input_repeat_timer)
+		}
+	}
+	if rl.IsKeyReleased(key) {
+		reset_timer(&g.input_repeat_delay_timer)
+		reset_timer(&g.input_repeat_timer)
+	}
 }

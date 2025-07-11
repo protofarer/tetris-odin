@@ -5,6 +5,7 @@ import rl "vendor:raylib"
 N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
 TETRAMINO_BLOCKS_PER_LAYOUT :: 4
 
+
 Tetramino :: struct {
 	type: Tetramino_Type,
 	layout: Tetramino_Layout,
@@ -22,6 +23,17 @@ Tetramino_Type :: enum {
 	S,
 	T,
 	O,
+}
+
+TETRA_COLORS := [Tetramino_Type]rl.Color{
+	.None = rl.BLANK,
+	.I = rl.YELLOW,
+	.J = rl.RED,
+	.L = rl.PINK,
+	.Z = rl.ORANGE,
+	.S = rl.PURPLE,
+	.T = rl.BLUE,
+	.O = rl.GREEN,
 }
 
 // Layouts correspond to clockwise progression in increasing index
@@ -219,3 +231,4 @@ get_previous_layout :: proc(t: Tetramino) -> (Tetramino_Layout, int) {
 get_layout :: proc(t: Tetramino_Type, i: int) -> Tetramino_Layout  {
 	return sa.get(LAYOUT_TABLES[t], i)
 }
+
