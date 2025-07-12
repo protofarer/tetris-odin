@@ -110,6 +110,7 @@ Block_Render_Data :: struct {
 	w,h: f32,
 	color: rl.Color,
 	border_color: rl.Color,
+	highlight_color: rl.Color,
 }
 
 Playfield :: struct {
@@ -208,115 +209,121 @@ update :: proc() {
 
 	old_tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
 
-	intended_move_x: i8
-	intended_rotation: i8
-	switch {
-	case .Left in input:
-		intended_move_x = -1
-	case .Right in input:
-		intended_move_x = 1
-	case .Rotate_CCW in input:
-		intended_rotation = -1
-	case .Rotate_CW in input:
-		intended_rotation = 1
-	case:
-		intended_move_x = 0
-		intended_rotation = 0
-	}
+	if g.tetramino.type != .None {
+		intended_move_x: i8
+		intended_rotation: i8
+		switch {
+		case .Shift_Left in input:
+			intended_move_x = -1
+		case .Shift_Right in input:
+			intended_move_x = 1
+		case .Rotate_CCW in input:
+			intended_rotation = -1
+		case .Rotate_CW in input:
+			intended_rotation = 1
+		case:
+			intended_move_x = 0
+			intended_rotation = 0
+		}
 
-	// Check if can move in x
-	if intended_move_x != 0 {
-		can_move_x := true
-		for pos in old_tetra_positions {
-			intended_x := pos.x + i32(intended_move_x)
-			if tetra_type, in_bounds := get_playfield_block(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
-				can_move_x = false
-				break
+		// Check if can move in x
+		if intended_move_x != 0 {
+			can_move_x := true
+			for pos in old_tetra_positions {
+				intended_x := pos.x + i32(intended_move_x)
+				if tetra_type, in_bounds := get_playfield_block(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
+					can_move_x = false
+					break
+				}
+			}
+			if can_move_x {
+				g.tetramino.layout_field_position.x += i32(intended_move_x)
+				play_sound(.Shift)
 			}
 		}
-		if can_move_x {
-			g.tetramino.layout_field_position.x += i32(intended_move_x)
-		}
-	}
 
-	// Check if can rotate
-	if intended_rotation != 0 {
-		intended_layout: Tetramino_Layout
-		intended_layout_idx: int
-		if intended_rotation == 1 {
-			intended_layout, intended_layout_idx = get_next_layout(g.tetramino) 
-		} else if intended_rotation == -1 {
-			intended_layout, intended_layout_idx = get_previous_layout(g.tetramino)
+		// Check if can rotate
+		if intended_rotation != 0 {
+			intended_layout: Tetramino_Layout
+			intended_layout_idx: int
+			if intended_rotation == 1 {
+				intended_layout, intended_layout_idx = get_next_layout(g.tetramino) 
+			} else if intended_rotation == -1 {
+				intended_layout, intended_layout_idx = get_previous_layout(g.tetramino)
+			}
+
+			intended_positions := get_tetramino_field_positions(intended_layout, g.tetramino.layout_field_position)
+			can_rotate := true
+			for intended_position in intended_positions {
+				if tetra_type, in_bounds := get_playfield_block(intended_position.x, intended_position.y); !in_bounds || tetra_type != .None {
+					can_rotate = false
+					break
+				}
+			}
+
+			if can_rotate {
+				g.tetramino.layout = intended_layout
+				g.tetramino.layout_idx = intended_layout_idx
+				play_sound(.Rotate)
+			}
+		}
+
+		// Drop
+		drop_rate := .Drop in input ? SUPER_DROP_RATE : g.level_drop_rate
+		if g.fall_frames < drop_rate {
+			g.fall_frames += 1
 		} else {
-			unreachable()
-		}
-
-		intended_positions := get_tetramino_field_positions(intended_layout, g.tetramino.layout_field_position)
-		can_rotate := true
-		for intended_position in intended_positions {
-			if tetra_type, in_bounds := get_playfield_block(intended_position.x, intended_position.y); !in_bounds || tetra_type != .None {
-				can_rotate = false
-				break
+			// check next down position for collision: block or ground
+			is_locked := false
+			for pos in old_tetra_positions {
+				tetra_type, in_bounds := get_playfield_block(pos.x, pos.y + 1)
+				if !in_bounds || tetra_type != .None {
+					is_locked = true
+					break
+				} 
 			}
-		}
+			if is_locked {
+				// locked: set the tetra in place and associated events
 
-		if can_rotate {
-			g.tetramino.layout = intended_layout
-			g.tetramino.layout_idx = intended_layout_idx
-		}
-	}
+				// create blocks at tetra locked positions
+				tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
+				for pos in tetra_positions {
+					set_playfield_block(pos.x, pos.y, g.tetramino.type)
+				}
 
-	// Drop
-	drop_rate := .Down in input ? SUPER_DROP_RATE : g.level_drop_rate
-	if g.fall_frames < drop_rate {
-		g.fall_frames += 1
-	} else {
-		// check next down position for collision: block or ground
-		is_locked := false
-		for pos in old_tetra_positions {
-			tetra_type, in_bounds := get_playfield_block(pos.x, pos.y + 1)
-			if !in_bounds || tetra_type != .None {
-				is_locked = true
-				break
-			} 
-		}
-		if is_locked {
-			// locked: hit bottom or a locked block below
+				g.previous_tetra_type = g.tetramino.type
 
-			// create blocks at tetra locked positions
-			tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
-			for pos in tetra_positions {
-				set_playfield_block(pos.x, pos.y, g.tetramino.type)
+				// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
+				// NOTE: other code keys off this value to signify no player controllable tetra on screen aka non-existent player tetra aka post-lock operations
+				g.tetramino = {
+					type = .None
+				}
+
+				y_positions_cleared := eval_lines_cleared()
+				n_lines_cleared := i32(sa.len(y_positions_cleared))
+				set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
+				restart_timer(&g.entry_delay_timer)
+				g.lines_just_cleared_y_positions = y_positions_cleared
+
+				// TODO: lines cleared animation
+				// toggle show_blocks_cleared bool for all cleared blocks
+				// use y_positions_cleared -> store in global
+				// TODO: remove lines
+
+				// update score
+				if n_lines_cleared > 0 {
+					g.score += calc_points(g.level, n_lines_cleared)
+				}
+				play_sound(.Lock)
+				if n_lines_cleared > 0 {
+					play_sound(.Clear)
+				}
+			} else {
+				// fall
+				g.tetramino.layout_field_position.y += 1
 			}
-
-			g.previous_tetra_type = g.tetramino.type
-
-			// null g.tetra
-			// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
-			g.tetramino = {
-				type = .None
-			}
-
-			y_positions_cleared := eval_lines_cleared()
-			n_lines_cleared := i32(sa.len(y_positions_cleared))
-			set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
-			restart_timer(&g.entry_delay_timer)
-			g.lines_just_cleared_y_positions = y_positions_cleared
-
-			// TODO: lines cleared animation
-			// toggle show_blocks_cleared bool for all cleared blocks
-			// use y_positions_cleared -> store in global
-			// TODO: remove lines
-
-			// update score
-			if n_lines_cleared > 0 {
-				g.score += calc_points(g.level, n_lines_cleared)
-			}
-		} else {
-			// fall
-			g.tetramino.layout_field_position.y += 1
+			g.fall_frames = 0
 		}
-		g.fall_frames = 0
 	}
 
 
@@ -331,6 +338,7 @@ update :: proc() {
 			if should_level_increase() {
 				g.level += 1
 				g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
+				play_sound(.Level)
 			}
 
 			// shift playfield down
@@ -381,6 +389,7 @@ update :: proc() {
 							h = BLOCK_PIXEL_SIZE,
 							color = TETRA_COLORS[g.tetramino.type],
 							border_color = rl.BLACK,
+							highlight_color = rl.RAYWHITE,
 						})
 						is_occupied_by_tetra = true
 					}
@@ -406,6 +415,7 @@ update :: proc() {
 						h = BLOCK_PIXEL_SIZE,
 						color = TETRA_COLORS[block_type],
 						border_color = rl.BLACK,
+						highlight_color = rl.RAYWHITE,
 					})
 				} else if is_block_in_cleared_row && !g.show_lines_cleared_flash {
 					sa.append(&g.block_render_data, Block_Render_Data{
@@ -415,6 +425,7 @@ update :: proc() {
 						h = BLOCK_PIXEL_SIZE,
 						color = LINE_CLEAR_FLASH_COLOR,
 						border_color = LINE_CLEAR_FLASH_COLOR,
+						highlight_color = LINE_CLEAR_FLASH_COLOR,
 					})
 				}
 			}
@@ -432,7 +443,6 @@ draw :: proc() {
 	rl.DrawTexturePro(tex_bg, src, dst, {}, 0, rl.Color{147,210,255,255})
 
 	rl.BeginMode2D(game_camera())
-
 
 	// Borders
 	rl.DrawRectangle(0,0,
@@ -463,7 +473,7 @@ draw :: proc() {
 
 	// Playfield + Tetra
 	for brd in sa.slice(&g.block_render_data) {
-		draw_block(brd.x, brd.y, brd.w, brd.h, brd.color, brd.border_color)
+		draw_block(brd.x, brd.y, brd.w, brd.h, brd.color, brd.border_color, brd.highlight_color)
 	}
 
 	// Panel
@@ -511,6 +521,7 @@ draw :: proc() {
 					BLOCK_PIXEL_SIZE, 
 					g.preview_tetra.color,
 					rl.BLACK,
+					rl.RAYWHITE,
 				)
 			}
 		}
@@ -535,15 +546,15 @@ draw :: proc() {
 }
 
 Input :: enum {
-	Down,
-	Left,
-	Right,
+	Drop,
+	Shift_Left,
+	Shift_Right,
+	Rotate_CCW,
+	Rotate_CW,
 	Toggle_Music,
 	Toggle_Preview,
 	Exit,
 	Toggle_Debug,
-	Rotate_CCW,
-	Rotate_CW,
 }
 
 // Map input to keys, make a table
@@ -555,16 +566,16 @@ Input_Map_Entry :: struct {
 	key: rl.KeyboardKey
 }
 
-input_map := [?]Input_Map_Entry{
+INPUT_MAP := [?]Input_Map_Entry{
 	{.Toggle_Debug, .GRAVE},
-	{.Down, .DOWN},
-	{.Left, .LEFT},
-	{.Right, .RIGHT},
-	{.Down, .S},
-	{.Left, .A},
-	{.Right, .D},
+	{.Drop, .DOWN},
+	{.Shift_Left, .LEFT},
+	{.Shift_Right, .RIGHT},
 	{.Rotate_CCW, .Z},
 	{.Rotate_CW, .X},
+	{.Drop, .S},
+	{.Shift_Left, .A},
+	{.Shift_Right, .D},
 	{.Toggle_Music, .M},
 	{.Toggle_Preview, .P},
 	{.Exit, .ESCAPE},
@@ -572,18 +583,18 @@ input_map := [?]Input_Map_Entry{
 
 process_input :: proc(input: ^Input_Set) {
 	// Read input
-	for entry in input_map {
+	for entry in INPUT_MAP {
 		switch entry.input {
 		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit:
 			if rl.IsKeyPressed(entry.key) {
 				input^ += {entry.input}
 			}
 
-		case .Left, .Right, .Rotate_CCW, .Rotate_CW:
+		case .Shift_Left, .Shift_Right, .Rotate_CCW, .Rotate_CW:
 			delay_and_repeat_input(input, entry.key, entry.input)
 
 		// Down input is a flag, toggling super gravity
-		case .Down:
+		case .Drop:
 			if rl.IsKeyDown(entry.key) {
 				input^ += {entry.input}
 			}
@@ -592,6 +603,8 @@ process_input :: proc(input: ^Input_Set) {
 
 	// Apply some inputs here
 	if .Toggle_Debug in input do g.debug = !g.debug
+
+	
 }
  
 // Run once: allocate, set global variable immutable values
@@ -842,19 +855,20 @@ roll_start_game :: proc() -> Tetramino_Type {
 	}
 }
 
-draw_block :: proc(x,y,w,h: f32, fill_color, border_color: rl.Color) {
-	draw_block_fill(x,y,w,h,fill_color)
+draw_block :: proc(x,y,w,h: f32, fill_color, border_color: rl.Color, highlight_color: rl.Color) {
+	draw_block_fill(x,y,w,h,fill_color,highlight_color)
 	draw_block_border(x,y,w,h,border_color)
 }
 
-draw_block_fill :: proc(x, y, w, h: f32, color: rl.Color) {
+draw_block_fill :: proc(x, y, w, h: f32, fill_color: rl.Color, highlight_color: rl.Color) {
 	// Body
-	rl.DrawRectangleV({x+1, y+1}, {w-2, h-2}, color)
-	// Highlight
-	rl.DrawPixel(i32(x+1), i32(y+1), rl.RAYWHITE) // point
+	rl.DrawRectangleV({x+1, y+1}, {w-2, h-2}, fill_color)
 
-	rl.DrawRectangleV({x+2, y+2}, {2, 2}, rl.RAYWHITE) // edge
-	rl.DrawPixel(i32(x+2+1), i32(y+2+1), color) // block out
+	// Highlight
+	rl.DrawPixel(i32(x+1), i32(y+1), highlight_color) // point
+
+	rl.DrawRectangleV({x+2, y+2}, {2, 2}, highlight_color) // edge
+	rl.DrawPixel(i32(x+2+1), i32(y+2+1), fill_color) // block out
 }
 
 draw_block_border :: proc(x, y, w, h: f32, color: rl.Color) {
