@@ -16,9 +16,8 @@ Position :: Vec2i
 
 WINDOW_W :: 720
 WINDOW_H :: 720
-TICK_RATE :: 60
-
 PIXEL_WINDOW_HEIGHT :: 180
+TICK_RATE :: 60
 
 BACKGROUND_COLOR :: rl.Color{142,142,142,255}
 
@@ -41,6 +40,8 @@ ARE_FRAMES :: 2 // TODO: invis for 1st frame after spawning
 
 LINE_CLEAR_ANIMATION_FRAME_INTERVAL :: 10
 LINE_CLEAR_FLASH_COLOR :: rl.GRAY
+
+
 // frames per row
 LEVEL_DROP_RATES := [?]i32{
 	53,
@@ -65,6 +66,9 @@ LEVEL_DROP_RATES := [?]i32{
 	 4,
 	 3,
 }
+
+MAX_LEVEL :: len(LEVEL_DROP_RATES)
+
 SUPER_DROP_RATE :: 3
 
 POINTS_TABLE := [?]i32{
@@ -166,7 +170,7 @@ update :: proc() {
 	update_scene(&g.scene, &g.next_scene, dt)
 
 	if next, ok := g.next_scene.?; ok {
-		transition_scene(next)
+		transition_scene(g.scene, next)
 		g.next_scene = nil
 	}
 }
@@ -238,6 +242,7 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 	// rl.DrawRectangle(LEVEL_LABEL_POS.x-3, LEVEL_LABEL_POS.y-3, 45, 23, rl.WHITE)
 	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 10, rl.BLACK)
 	rl.DrawText(fmt.ctprint(s.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 10, rl.BLACK)
+	rl.DrawText("H", LEVEL_VALUE_POS.x+30, LEVEL_VALUE_POS.y, 10, rl.BLACK)
 
 	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 80}
 	LINES_VALUE_POS :: Vec2i{LINES_LABEL_POS.x, LINES_LABEL_POS.y + 10}
@@ -369,7 +374,7 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 
 	if s.is_game_over && .Goto_Menu in input {
 		pr("transition scene to menu")
-		transition_scene(.Menu)
+		transition_scene(s^, .Menu)
 	}
 
 	return input
@@ -402,22 +407,29 @@ setup :: proc() {
 init :: proc() {
 	g.game_state = .Play
 	g.debug = false
-	transition_scene(.Play)
+	transition_scene({}, .Menu)
 }
 
 init_menu_scene :: proc(s: ^Menu_Scene) {
-	s.selected_game_type = .A
+	s.game_settings = {
+		start_level = 0,
+		garbage_height = 0,
+		hard_mode = false,
+	}
 	s.selected_music_type = .A
-	s.is_hard_mode_selected = false
+	s.submenu = .Start
+	s.game_type = .Marathon
 }
 
-init_play_scene :: proc(s: ^Play_Scene) {
+init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Game_Settings) {
 	set_timer_duration(&s.entry_delay_timer, ARE_FRAMES)
 	reset_timer(&s.entry_delay_timer)
-	s.tetramino = {}
 	s.score = 0
-	s.level = 0
-	s.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], s.level)
+	s.level = game_settings.start_level
+	s.start_level = game_settings.start_level
+	s.garbage_height = game_settings.garbage_height
+	s.hard_mode = game_settings.hard_mode
+	s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, game_settings.hard_mode)
 	s.fall_frames = 0
 	s.show_lines_cleared_flash = true
 	s.lines_cleared_accum = 0
@@ -427,14 +439,33 @@ init_play_scene :: proc(s: ^Play_Scene) {
 	sa.clear(&s.lines_just_cleared_y_positions)
 	sa.clear(&s.block_render_data)
 	clear_playfield(s)
-	log.info("Initialization done.")
+
+	// TODO: fill garbage height
+	// 2 * garbage_height,
+	// shift garbage pattern to right, use a cursor
+	cursor := 0
+	for y in 0..<2*s.garbage_height {
+		row := GARBAGE_PATTERN
+		row_len := len(GARBAGE_PATTERN)
+		for x in 0..<PLAYFIELD_BLOCK_W {
+			idx := cursor + x % row_len
+			if row[idx] == 1 {
+				tt := roll_seven()
+				set_playfield_block(s, i32(x), i32(PLAYFIELD_BLOCK_H - y), tt)
+			}
+		}
+		cursor += 1
+	}
+
+	s.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
+	s.input_repeat_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_repeat_delay_timer")
+	s.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 
 	update_preview_tetra(s)
 	starting_tetra_type := roll_start_game(s^)
 	spawn_tetramino(starting_tetra_type, {}, s)
-	s.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
-	s.input_repeat_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_repeat_delay_timer")
-	s.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
+
+	log.info("Play scene initialization done.")
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -560,8 +591,9 @@ set_playfield_block :: proc(s: ^Play_Scene, x: i32, y: i32, tetra_type: Tetramin
 	s.playfield.blocks[y][x] = tetra_type
 }
 
-get_current_frames_per_row :: proc(table: []i32, level: i32) -> i32 {
-	return table[level]
+get_drop_rate :: proc(table: []i32, level: i32, hard_mode: bool) -> i32 {
+	idx := min(level + (hard_mode ? 10 : 0), MAX_LEVEL - 1)
+	return table[idx]
 }
 
 calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
@@ -573,10 +605,10 @@ calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
 	} 
 }
 
-should_level_increase :: proc(lines_cleared_accum: i32, level: i32) -> bool {
-	if (lines_cleared_accum >= (level + 1) * LINES_PER_LEVEL) {
+should_level_increase :: proc(lines_cleared_accum: i32, level: i32, start_level: i32) -> bool {
+	if (lines_cleared_accum >= (start_level * LINES_PER_LEVEL + LINES_PER_LEVEL) + LINES_PER_LEVEL * (level - start_level)) && level < 20 {
 		return true
-	}
+	} 
 	return false
 }
 
@@ -741,12 +773,29 @@ Scene_Type :: enum {
 }
 
 Menu_Scene :: struct {
-	selected_game_type: Game_Type,
+	game_settings: Game_Settings,
 	selected_music_type: Music_Type,
-	is_hard_mode_selected: bool,
+	submenu: Submenu,
+	game_type: Game_Type,
 }
 
-Game_Type :: enum { A, B }
+Game_Type :: enum {
+	Marathon,
+	Lines,
+}
+
+Submenu :: enum {
+	Start,
+	Marathon,
+	Lines,
+}
+
+Game_Settings :: struct {
+	start_level: i32,
+	garbage_height: i32,
+	hard_mode: bool,
+}
+
 Music_Type :: enum { A, B, C, D }
 
 Play_Scene :: struct {
@@ -772,6 +821,10 @@ Play_Scene :: struct {
 	// For randomizer, reroll if 1st roll results in same previous tetra
 	previous_tetra_type: Tetramino_Type,
 	preview_tetra: Tetramino,
+
+	start_level: i32, // Marathon Game Type
+	garbage_height: i32, // Lines Game Type
+	hard_mode: bool,
 
 	is_game_over: bool,
 }
@@ -803,16 +856,42 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 	rl.BeginDrawing()
 	rl.ClearBackground(BACKGROUND_COLOR)
 
+	tex_bg := get_texture(.Background)
+	src := rl.Rectangle{0, 0, f32(tex_bg.width), f32(tex_bg.height)}
+	dst := rl.Rectangle{0, 0, WINDOW_W, WINDOW_H}
+	rl.DrawTexturePro(tex_bg, src, dst, {}, 0, rl.Color{255,255,255,32})
+
 	rl.BeginMode2D(game_camera())
-	rl.DrawText("Menu Scene", 10, 10, 11, rl.BLACK)
 
-	gt := fmt.ctprintf("Game Type: %v", s.selected_game_type)
-	rl.DrawText(gt, 10, 20, 11, rl.BLACK)
-
-	mt := fmt.ctprintf("Music Type: %v", s.selected_music_type)
-	rl.DrawText(mt, 10, 30, 11, rl.BLACK)
-
-	rl.DrawText("SPACE TO START", 10, 50, 11, rl.BLACK)
+	switch s.submenu {
+	case .Start:
+		rl.DrawText("Menu Scene", 30, 10, 16, rl.BLACK)
+		gt := fmt.ctprintf("Game Type: %v", s.game_type)
+		y :i32= 30
+		rl.DrawText(gt, 10, y, 11, rl.BLACK)
+		ht := fmt.ctprintf("Hard Mode: %v", s.game_settings.hard_mode ? "ON" : "OFF")
+		y += 13
+		rl.DrawText(ht, 10, y, 11, rl.BLACK)
+		mt := fmt.ctprintf("Music Type: %v", s.selected_music_type)
+		y += 13
+		rl.DrawText(mt, 10, y, 11, rl.BLACK)
+		y += 40
+		rl.DrawText("ENTER TO CONFIRM", 40, y, 11, rl.BLACK)
+	case .Marathon:
+		rl.DrawText("Marathon Mode", 30, 10, 16, rl.BLACK)
+		gt := fmt.ctprintf("Start Level: %v", s.game_settings.start_level)
+		y: i32 = 30
+		rl.DrawText(gt, 30, y, 11, rl.BLACK)
+		y += 40
+		rl.DrawText("ENTER TO PLAY", 30, y, 11, rl.BLACK)
+	case .Lines:
+		rl.DrawText("Lines Mode", 30, 10, 16, rl.BLACK)
+		gt := fmt.ctprintf("Lines Height: %v", s.game_settings.garbage_height)
+		y: i32 = 30
+		rl.DrawText(gt, 30, y, 11, rl.BLACK)
+		y += 40
+		rl.DrawText("ENTER TO PLAY", 30, y, 11, rl.BLACK)
+	}
 
 	rl.EndMode2D()
 	rl.EndDrawing()
@@ -931,11 +1010,6 @@ update_play_scene :: proc(s: ^Play_Scene) {
 				restart_timer(&s.entry_delay_timer)
 				s.lines_just_cleared_y_positions = y_positions_cleared
 
-				// TODO: lines cleared animation
-				// toggle show_blocks_cleared bool for all cleared blocks
-				// use y_positions_cleared -> store in global
-				// TODO: remove lines
-
 				// update score
 				if n_lines_cleared > 0 {
 					s.score += calc_points(s.level, n_lines_cleared)
@@ -961,9 +1035,9 @@ update_play_scene :: proc(s: ^Play_Scene) {
 			n_lines_cleared := sa.len(s.lines_just_cleared_y_positions)
 			s.lines_cleared_accum += i32(n_lines_cleared)
 			// update lines_cleared and preview here
-			if should_level_increase(s.lines_cleared_accum, s.level) {
+			if should_level_increase(s.lines_cleared_accum, s.level, s.start_level) {
 				s.level += 1
-				s.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], s.level)
+				s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
 				play_sound(.Level)
 			}
 
@@ -1059,43 +1133,54 @@ update_play_scene :: proc(s: ^Play_Scene) {
 	}
 }
 
-transition_scene :: proc(next: Scene_Type) {
-	pr("TRANSITION TO NEXT:", next)
-	switch next {
+transition_scene :: proc(curr_scene: Scene, next_scene_type: Scene_Type) {
+	log.debug("Transitioning next scene:", next_scene_type)
+	switch next_scene_type {
 	case .Play:
 		play_scene := Play_Scene{}
-		init_play_scene(&play_scene)
+		s := curr_scene.(Menu_Scene)
+		game_type := s.game_type
+		game_settings := s.game_settings
+		init_play_scene(&play_scene, game_type, game_settings)
 		g.scene = play_scene
+		log.debug("set scene to play")
 	case .Menu:
 		menu_scene := Menu_Scene{}
 		init_menu_scene(&menu_scene)
 		g.scene = menu_scene
-		pr("set scene to Mneu")
+		log.debug("set scene to Menu")
 	}
 }
 
 update_menu_scene :: proc(s: ^Menu_Scene) {
-	// pr("update menu")
 	process_input_menu_scene(s)
 }
 
 Menu_Input :: enum {
-	Select_Next_Game_Type,
-	Select_Previous_Game_Type,
-	Select_Next_Music_Type,
-	Select_Previous_Music_Type,
+	Toggle_Game_Type,
+	Up,
+	Down,
 	Toggle_Hard_Mode,
 	Goto_Play,
+	Goto_Submenu,
+	Backto_Start_Submenu,
 }
 
 MENU_INPUT_MAP := [?]Input_Map_Entry(Menu_Input){
-	{.Select_Next_Game_Type, .RIGHT},
-	{.Select_Previous_Game_Type, .LEFT},
-	{.Select_Next_Music_Type, .DOWN},
-	{.Select_Previous_Music_Type, .UP},
+	{.Toggle_Game_Type, .RIGHT},
+	{.Toggle_Game_Type, .LEFT},
+	{.Up, .UP},
+	{.Down, .DOWN},
 	{.Toggle_Hard_Mode, .H},
-	{.Goto_Play, .SPACE}, // TODO: if set to ENTER, seems to read the Enter input from Play's Game_Over. Issue even when update_scene put before the update frame's call to transition_scene. Thought about clearing raylib inputs, but cannot do it.
+	{.Goto_Submenu, .ENTER},
+	{.Backto_Start_Submenu, .BACKSPACE},
+	{.Goto_Play, .ENTER}, // TODO: if set to ENTER, seems to read the Enter input from Play's Game_Over. Issue even when update_scene put before the update frame's call to transition_scene. Thought about clearing raylib inputs, but cannot do it.
 }
+
+MIN_START_LEVEL :: 0
+MAX_START_LEVEL :: 9
+MIN_GARBAGE_LEVEL :: 0
+MAX_GARBAGE_LEVEL :: 5
 
 process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 	// pr("IN PROC INPUT MENU")
@@ -1103,7 +1188,7 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 	input: bit_set[Menu_Input]
 	for entry in MENU_INPUT_MAP {
 		switch entry.input {
-		case .Select_Next_Game_Type, .Select_Previous_Game_Type, .Select_Next_Music_Type, .Select_Previous_Music_Type, .Toggle_Hard_Mode, .Goto_Play:
+		case .Toggle_Game_Type, .Up, .Down, .Toggle_Hard_Mode, .Goto_Play, .Goto_Submenu, .Backto_Start_Submenu:
 			if rl.IsKeyPressed(entry.key) {
 				input += {entry.input}
 			}
@@ -1111,52 +1196,71 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 	}
 
 	// Apply input
-	if .Select_Next_Game_Type in input {
-		switch s.selected_game_type {
-		case .A:
-			s.selected_game_type = .B
-		case .B:
-			s.selected_game_type = .A
+	if .Toggle_Game_Type in input {
+		if s.game_type == .Marathon {
+			s.game_type = .Lines
+		} else if s.game_type == .Lines {
+			s.game_type = .Marathon
 		}
-		pr("game_type", s.selected_game_type)
-	} else if .Select_Previous_Game_Type in input {
-		switch s.selected_game_type {
-		case .A:
-			s.selected_game_type = .B
-		case .B:
-			s.selected_game_type = .A
-		}
-		pr("game_type", s.selected_game_type)
-	} else if .Select_Next_Music_Type in input {
-		switch s.selected_music_type {
-		case .A:
-			s.selected_music_type = .B
-		case .B:
-			s.selected_music_type = .C
-		case .C:
-			s.selected_music_type = .D
-		case .D:
-			s.selected_music_type = .A
-		}
-		pr("music_type", s.selected_music_type)
-	} else if .Select_Previous_Music_Type in input {
-		switch s.selected_music_type {
-		case .A:
-			s.selected_music_type = .D
-		case .B:
-			s.selected_music_type = .A
-		case .C:
-			s.selected_music_type = .B
-		case .D:
-			s.selected_music_type = .C
-		}
-		pr("music_type", s.selected_music_type)
-	} else if .Toggle_Hard_Mode in input {
-		s.is_hard_mode_selected = !s.is_hard_mode_selected
-	} else if .Goto_Play in input {
-		pr("detected GotoPlay")
-		g.next_scene = .Play
-	}
+		pr("game_type", s.game_type)
+	} else if .Down in input {
+		if s.submenu == .Start {
+			switch s.selected_music_type {
+			case .A:
+				s.selected_music_type = .B
+			case .B:
+				s.selected_music_type = .C
+			case .C:
+				s.selected_music_type = .D
+			case .D:
+				s.selected_music_type = .A
+			}
+			pr("music_type", s.selected_music_type)
 
+		} else if s.submenu == .Marathon {
+			s.game_settings.start_level = max(s.game_settings.start_level-1, MIN_START_LEVEL)
+
+		} else if s.submenu == .Lines {
+			s.game_settings.garbage_height = max(s.game_settings.garbage_height-1, MIN_GARBAGE_LEVEL)
+		}
+	} else if .Up in input {
+		if s.submenu == .Start {
+			switch s.selected_music_type {
+			case .A:
+				s.selected_music_type = .D
+			case .B:
+				s.selected_music_type = .A
+			case .C:
+				s.selected_music_type = .B
+			case .D:
+				s.selected_music_type = .C
+			}
+			pr("music_type", s.selected_music_type)
+
+		} else if s.submenu == .Marathon {
+			s.game_settings.start_level = min(s.game_settings.start_level+1, MAX_START_LEVEL)
+		} else if s.submenu == .Lines {
+			s.game_settings.garbage_height = min(s.game_settings.garbage_height+1, MAX_GARBAGE_LEVEL)
+		}
+	} else if .Toggle_Hard_Mode in input {
+		s.game_settings.hard_mode = !s.game_settings.hard_mode
+	} else if .Goto_Play in input && s.submenu != .Start {
+		g.next_scene = .Play
+		log.info("Input action Goto_Play")
+	} else if .Goto_Submenu in input && s.submenu == .Start {
+		log.info("Input action Goto_Submenu")
+		if s.game_type == .Marathon {
+			s.submenu = .Marathon
+		} else if s.game_type == .Lines {
+			s.submenu = .Lines
+		}
+	} else if .Backto_Start_Submenu in input && s.submenu != .Start {
+		s.submenu = .Start
+		s.game_settings.start_level = 0
+		s.game_settings.garbage_height = 0
+	}
 	return input
 }
+
+// 3 holes per row
+GARBAGE_PATTERN := [10]u8 {0,1,1,0,1,1,0,1,1,0} // Height 0
