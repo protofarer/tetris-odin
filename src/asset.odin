@@ -1,7 +1,6 @@
 package game
 
 Texture_ID :: enum {
-    Player,
 	Background,
 	Border,
 }

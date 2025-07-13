@@ -77,33 +77,14 @@ POINTS_TABLE := [?]i32{
 LINES_PER_LEVEL :: 10
 
 Game_Memory :: struct {
-	game_state: Game_State,
+	game_state: Game_State, // CSDR app_state
 	resman: ^Resource_Manager,
 	debug: bool,
 
-	playfield: Playfield,
-	tetramino: Tetramino,
-	level: i32,
-	score: i32,
-
-	block_render_data: sa.Small_Array(PLAYFIELD_BLOCK_W * PLAYFIELD_BLOCK_H, Block_Render_Data),
-	input_repeat_delay_timer: Timer, // DAS
-	input_repeat_timer: Timer, // ARR
-	input: Input_Set,
-
-	fall_frames: i32,
-
-	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
-	show_lines_cleared_flash: bool,
-	lines_cleared_accum: i32,
-	entry_delay_timer: Timer, // ARE
-
-	level_drop_rate: i32,
-
-	// For randomizer, reroll if 1st roll results in same previous tetra
-	previous_tetra_type: Tetramino_Type,
-	preview_tetra: Tetramino,
+	scene: Scene,
+	next_scene: Maybe(Scene_Type),
 }
+
 
 Block_Render_Data :: struct {
 	x,y: f32,
@@ -114,8 +95,10 @@ Block_Render_Data :: struct {
 }
 
 Playfield :: struct {
-	blocks: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Tetramino_Type
+	blocks: Playfield_Blocks
 }
+
+Playfield_Blocks :: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Tetramino_Type
 
 Entity :: struct {
 	pos: Position,
@@ -149,291 +132,50 @@ ui_camera :: proc() -> rl.Camera2D {
 	}
 }
 
-init_tetra :: proc(tetra: ^Tetramino, type: Tetramino_Type) {
-	tetra^ = Tetramino{
-		type = type,
-		layout = get_layout(type, 0),
-		layout_field_position = {3,0},
-		color = TETRA_COLORS[type],
-	}
+Global_Input :: enum {
+	Toggle_Debug,
+	Exit,
 }
 
-spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}) {
-	if g.tetramino.type != .None {
-		log.error("Cannot spawn tetramino when one currently exists")
-		return
-	}
-	t: Tetramino
-	init_tetra(&t, type)
-	g.tetramino = t
-	g.fall_frames = 0 // reset fall "timer"
-}
-
-// get tile and check OOB
-get_playfield_block :: proc(x: i32, y: i32) -> (Tetramino_Type, bool) {
-	if x < 0 || x >= PLAYFIELD_BLOCK_W || y < 0 || y >= PLAYFIELD_BLOCK_H {
-		return .None, false
-	}
-	return g.playfield.blocks[y][x], true
-}
-
-// Returns 4 blocks as a rule, otherwise remains a usable zero valued array
-get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_position: Position) -> [TETRAMINO_BLOCKS_PER_LAYOUT]Position {
-	idx := 0
-	new_tetramino_positions: [TETRAMINO_BLOCKS_PER_LAYOUT]Position
-	for row, layout_local_y in layout {
-		for val, layout_local_x in row {
-			if val != 0 {
-				new_tetramino_positions[idx] = Position{
-						layout_field_position.x + i32(layout_local_x), 
-						layout_field_position.y + i32(layout_local_y)
-					}
-				idx += 1
-			}
-		}
-	}
-	return new_tetramino_positions
+GLOBAL_INPUT_MAP := [?]Input_Map_Entry(Global_Input){
+	{.Toggle_Debug, .GRAVE},
+	{.Exit, .ESCAPE},
 }
 
 update :: proc() {
-	// TODO: rename to appropriate nomenclature, check for collision before moving
-	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
+	dt := rl.GetFrameTime()
 
-	input: Input_Set
-	process_input(&input)
-
-	// CSDR
-	// if g.tetramino != {} {
-	// 	update_tetramino()
-	// }
-
-	old_tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
-
-	if g.tetramino.type != .None {
-		intended_move_x: i8
-		intended_rotation: i8
-		switch {
-		case .Shift_Left in input:
-			intended_move_x = -1
-		case .Shift_Right in input:
-			intended_move_x = 1
-		case .Rotate_CCW in input:
-			intended_rotation = -1
-		case .Rotate_CW in input:
-			intended_rotation = 1
-		case:
-			intended_move_x = 0
-			intended_rotation = 0
-		}
-
-		// Check if can move in x
-		if intended_move_x != 0 {
-			can_move_x := true
-			for pos in old_tetra_positions {
-				intended_x := pos.x + i32(intended_move_x)
-				if tetra_type, in_bounds := get_playfield_block(intended_x, i32(pos.y)); !in_bounds || tetra_type != .None {
-					can_move_x = false
-					break
-				}
+	// Global Input
+	input: bit_set[Global_Input]
+	for entry in GLOBAL_INPUT_MAP {
+		switch entry.input {
+		case .Toggle_Debug, .Exit:
+			if rl.IsKeyPressed(entry.key) {
+				input += {entry.input}
 			}
-			if can_move_x {
-				g.tetramino.layout_field_position.x += i32(intended_move_x)
-				play_sound(.Shift)
-			}
-		}
-
-		// Check if can rotate
-		if intended_rotation != 0 {
-			intended_layout: Tetramino_Layout
-			intended_layout_idx: int
-			if intended_rotation == 1 {
-				intended_layout, intended_layout_idx = get_next_layout(g.tetramino) 
-			} else if intended_rotation == -1 {
-				intended_layout, intended_layout_idx = get_previous_layout(g.tetramino)
-			}
-
-			intended_positions := get_tetramino_field_positions(intended_layout, g.tetramino.layout_field_position)
-			can_rotate := true
-			for intended_position in intended_positions {
-				if tetra_type, in_bounds := get_playfield_block(intended_position.x, intended_position.y); !in_bounds || tetra_type != .None {
-					can_rotate = false
-					break
-				}
-			}
-
-			if can_rotate {
-				g.tetramino.layout = intended_layout
-				g.tetramino.layout_idx = intended_layout_idx
-				play_sound(.Rotate)
-			}
-		}
-
-		// Drop
-		drop_rate := .Drop in input ? SUPER_DROP_RATE : g.level_drop_rate
-		if g.fall_frames < drop_rate {
-			g.fall_frames += 1
-		} else {
-			// check next down position for collision: block or ground
-			is_locked := false
-			for pos in old_tetra_positions {
-				tetra_type, in_bounds := get_playfield_block(pos.x, pos.y + 1)
-				if !in_bounds || tetra_type != .None {
-					is_locked = true
-					break
-				} 
-			}
-			if is_locked {
-				// locked: set the tetra in place and associated events
-
-				// create blocks at tetra locked positions
-				tetra_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
-				for pos in tetra_positions {
-					set_playfield_block(pos.x, pos.y, g.tetramino.type)
-				}
-
-				g.previous_tetra_type = g.tetramino.type
-
-				// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
-				// NOTE: other code keys off this value to signify no player controllable tetra on screen aka non-existent player tetra aka post-lock operations
-				g.tetramino = {
-					type = .None
-				}
-
-				y_positions_cleared := eval_lines_cleared()
-				n_lines_cleared := i32(sa.len(y_positions_cleared))
-				set_timer_duration(&g.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
-				restart_timer(&g.entry_delay_timer)
-				g.lines_just_cleared_y_positions = y_positions_cleared
-
-				// TODO: lines cleared animation
-				// toggle show_blocks_cleared bool for all cleared blocks
-				// use y_positions_cleared -> store in global
-				// TODO: remove lines
-
-				// update score
-				if n_lines_cleared > 0 {
-					g.score += calc_points(g.level, n_lines_cleared)
-				}
-				play_sound(.Lock)
-				if n_lines_cleared > 0 {
-					play_sound(.Clear)
-				}
-			} else {
-				// fall
-				g.tetramino.layout_field_position.y += 1
-			}
-			g.fall_frames = 0
 		}
 	}
-
-
-	// locked interlude processing
-	if g.tetramino.type == .None  {
-		if is_timer_done(g.entry_delay_timer) {
-			reset_timer(&g.entry_delay_timer)
-
-			n_lines_cleared := sa.len(g.lines_just_cleared_y_positions)
-			g.lines_cleared_accum += i32(n_lines_cleared)
-			// update lines_cleared and preview here
-			if should_level_increase() {
-				g.level += 1
-				g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
-				play_sound(.Level)
-			}
-
-			// shift playfield down
-			for y_to_clear in sa.slice(&g.lines_just_cleared_y_positions) {
-				// cleared_y_positions naturally ordered correctly
-				// starting from cleared_y_position - 1, copy into row below
-				for y := y_to_clear; y >= 1; y -= 1 {
-					g.playfield.blocks[y] = g.playfield.blocks[y-1]
-				}
-			}
-
-			if sa.len(g.lines_just_cleared_y_positions) > 0 {
-				sa.clear(&g.lines_just_cleared_y_positions)
-				g.show_lines_cleared_flash = true
-			}
-
-			// spawn with preview tetra
-			spawn_tetramino(g.preview_tetra.type)
-
-			// update next preview tetra
-			update_preview_tetra()
-
-			return
-		}
-		// animate lines_cleared state
-		if int(get_timer_accum(g.entry_delay_timer)) % LINE_CLEAR_ANIMATION_FRAME_INTERVAL == 0 {
-			g.show_lines_cleared_flash = !g.show_lines_cleared_flash
-		}
-		process_timer(&g.entry_delay_timer)
+	if .Toggle_Debug in input {
+		g.debug = !g.debug
+		pr("toggle global debug")
+	} else if .Exit in input {
+		game_shutdown()
+		game_shutdown_window()
 	}
 
-	// move new tetra based on layout_field_pos delta
-	new_tetramino_positions := get_tetramino_field_positions(g.tetramino.layout, g.tetramino.layout_field_position)
+	update_scene(&g.scene, &g.next_scene, dt)
 
-	sa.clear(&g.block_render_data)
-	for row, field_y in g.playfield.blocks {
-		for block_type, field_x in row {
-
-			// tetramino data
-			if g.tetramino.type != .None {
-				is_occupied_by_tetra := false
-				for tetra_field_pos in new_tetramino_positions {
-					if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
-						sa.append(&g.block_render_data, Block_Render_Data{
-							x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-							y = f32(field_y) * BLOCK_PIXEL_SIZE,
-							w = BLOCK_PIXEL_SIZE,
-							h = BLOCK_PIXEL_SIZE,
-							color = TETRA_COLORS[g.tetramino.type],
-							border_color = rl.BLACK,
-							highlight_color = rl.RAYWHITE,
-						})
-						is_occupied_by_tetra = true
-					}
-				} 
-				if is_occupied_by_tetra do continue
-			}
-
-			// playfield data and conditional render for animating cleared lines
-			if block_type != .None {
-				is_block_in_cleared_row := false
-				for y in sa.slice(&g.lines_just_cleared_y_positions) {
-					if i32(field_y) == y {
-						is_block_in_cleared_row = true
-						break
-					}
-				}
-
-				if !is_block_in_cleared_row || (is_block_in_cleared_row && g.show_lines_cleared_flash) {
-					sa.append(&g.block_render_data, Block_Render_Data{
-						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-						y = f32(field_y) * BLOCK_PIXEL_SIZE,
-						w = BLOCK_PIXEL_SIZE,
-						h = BLOCK_PIXEL_SIZE,
-						color = TETRA_COLORS[block_type],
-						border_color = rl.BLACK,
-						highlight_color = rl.RAYWHITE,
-					})
-				} else if is_block_in_cleared_row && !g.show_lines_cleared_flash {
-					sa.append(&g.block_render_data, Block_Render_Data{
-						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
-						y = f32(field_y) * BLOCK_PIXEL_SIZE,
-						w = BLOCK_PIXEL_SIZE,
-						h = BLOCK_PIXEL_SIZE,
-						color = LINE_CLEAR_FLASH_COLOR,
-						border_color = LINE_CLEAR_FLASH_COLOR,
-						highlight_color = LINE_CLEAR_FLASH_COLOR,
-					})
-				}
-			}
-		}
+	if next, ok := g.next_scene.?; ok {
+		transition_scene(next)
+		g.next_scene = nil
 	}
 }
 
 draw :: proc() {
+	draw_scene(&g.scene)
+}
+
+draw_play_scene :: proc(s: ^Play_Scene) {
 	rl.BeginDrawing()
 	rl.ClearBackground(BACKGROUND_COLOR)
 
@@ -472,7 +214,7 @@ draw :: proc() {
 	// )
 
 	// Playfield + Tetra
-	for brd in sa.slice(&g.block_render_data) {
+	for brd in sa.slice(&s.block_render_data) {
 		draw_block(brd.x, brd.y, brd.w, brd.h, brd.color, brd.border_color, brd.highlight_color)
 	}
 
@@ -487,7 +229,7 @@ draw :: proc() {
 	// DrawRectangleRounded(rec: Rectangle, roundness: f32, segments: c.int, color: Color)
 	// rl.DrawRectangle(SCORE_LABEL_POS.x-3, SCORE_LABEL_POS.y-3, 45, 30, rl.WHITE)
 	rl.DrawText("SCORE", SCORE_LABEL_POS.x, SCORE_LABEL_POS.y, 9, rl.BLACK)
-	rl.DrawText(fmt.ctprint(g.score), SCORE_VALUE_POS.x, SCORE_VALUE_POS.y, 10, rl.BLACK)
+	rl.DrawText(fmt.ctprint(s.score), SCORE_VALUE_POS.x, SCORE_VALUE_POS.y, 10, rl.BLACK)
 
 	LEVEL_LABEL_POS :: Vec2i{PANEL_X + 5, 50}
 	LEVEL_VALUE_POS :: Vec2i{LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y + 10}
@@ -495,7 +237,7 @@ draw :: proc() {
 	rl.DrawRectangleRounded(level_rect, 0.1, 3, rl.WHITE)
 	// rl.DrawRectangle(LEVEL_LABEL_POS.x-3, LEVEL_LABEL_POS.y-3, 45, 23, rl.WHITE)
 	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 10, rl.BLACK)
-	rl.DrawText(fmt.ctprint(g.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 10, rl.BLACK)
+	rl.DrawText(fmt.ctprint(s.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 10, rl.BLACK)
 
 	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 80}
 	LINES_VALUE_POS :: Vec2i{LINES_LABEL_POS.x, LINES_LABEL_POS.y + 10}
@@ -503,7 +245,7 @@ draw :: proc() {
 	rl.DrawRectangleRounded(lines_rect, 0.1, 3, rl.WHITE)
 	// rl.DrawRectangle(LINES_LABEL_POS.x-3, LINES_LABEL_POS.y-3, 45, 23, rl.WHITE)
 	rl.DrawText("LINES", LINES_LABEL_POS.x, LINES_LABEL_POS.y, 10, rl.BLACK)
-	rl.DrawText(fmt.ctprint(g.lines_cleared_accum), LINES_VALUE_POS.x, LINES_VALUE_POS.y, 10, rl.BLACK)
+	rl.DrawText(fmt.ctprint(s.lines_cleared_accum), LINES_VALUE_POS.x, LINES_VALUE_POS.y, 10, rl.BLACK)
 
 	PREVIEW_BOX_POS :: Vec2{PANEL_X + 5, 110}
 	PREVIEW_BOX_SIZE :: Vec2{50,50}
@@ -511,7 +253,7 @@ draw :: proc() {
 	rl.DrawRectangleRounded(preview_rect, 0.1, 3, rl.WHITE)
 	// rl.DrawRectangleV(PREVIEW_BOX_POS, PREVIEW_BOX_SIZE, rl.RAYWHITE)
 
-	for row, y in g.preview_tetra.layout {
+	for row, y in s.preview_tetra.layout {
 		for val, x in row {
 			if val != 0 {
 				draw_block(
@@ -519,12 +261,31 @@ draw :: proc() {
 					f32(PREVIEW_BOX_POS.y) + f32(y) * BLOCK_PIXEL_SIZE, 
 					BLOCK_PIXEL_SIZE, 
 					BLOCK_PIXEL_SIZE, 
-					g.preview_tetra.color,
+					s.preview_tetra.color,
 					rl.BLACK,
 					rl.RAYWHITE,
 				)
 			}
 		}
+	}
+
+	if s.is_game_over {
+		y1 :i32 = 25
+		r := rl.Rectangle{25-3, f32(y1)-3, 45, 45}
+		// rl.DrawRectangleRoundedLines(r, 0.1, 3, rl.WHITE)
+		rl.DrawRectangleRounded(r, 0.1, 3, rl.Color{255,255,255,192})
+
+		rl.DrawText("GAME", 25, y1, 12, rl.BLACK)
+		y1 += 10
+		rl.DrawText("OVER", 25, y1, 12, rl.BLACK)
+		y2 :i32= 75
+		rl.DrawText("PLEASE ", 25, y2, 12, rl.BLACK)
+		y2 += 10
+		rl.DrawText("TRY", 25, y2, 12, rl.BLACK)
+		y2 += 10
+		rl.DrawText("AGAIN", 25, y2, 12, rl.BLACK)
+		y2 += 15
+		rl.DrawText("HIT ENTER", 25, y2, 12, rl.BLACK)
 	}
 
 	// Debug
@@ -539,13 +300,13 @@ draw :: proc() {
 	rl.EndMode2D()
 
 	rl.BeginMode2D(ui_camera())
-		rl.DrawText(fmt.ctprintf("layout_pos: %v\nlevel_drop_rate: %v", g.tetramino.layout_field_position, g.level_drop_rate), 5, 5, 10, rl.WHITE)
+		rl.DrawText(fmt.ctprintf("layout_pos: %v\nlevel_drop_rate: %v", s.tetramino.layout_field_position, s.level_drop_rate), 5, 5, 10, rl.WHITE)
 	rl.EndMode2D()
 
 	rl.EndDrawing()
 }
 
-Input :: enum {
+Play_Input :: enum {
 	Drop,
 	Shift_Left,
 	Shift_Right,
@@ -555,18 +316,15 @@ Input :: enum {
 	Toggle_Preview,
 	Exit,
 	Toggle_Debug,
+	Goto_Menu,
 }
 
-// Map input to keys, make a table
-
-Input_Set :: bit_set[Input]
-
-Input_Map_Entry :: struct {
-	input: Input,
+Input_Map_Entry :: struct ($T: typeid) {
+	input: T,
 	key: rl.KeyboardKey
 }
 
-INPUT_MAP := [?]Input_Map_Entry{
+PLAY_INPUT_MAP := [?]Input_Map_Entry(Play_Input){
 	{.Toggle_Debug, .GRAVE},
 	{.Drop, .DOWN},
 	{.Shift_Left, .LEFT},
@@ -579,32 +337,42 @@ INPUT_MAP := [?]Input_Map_Entry{
 	{.Toggle_Music, .M},
 	{.Toggle_Preview, .P},
 	{.Exit, .ESCAPE},
+	{.Goto_Menu, .ENTER}
 }
 
-process_input :: proc(input: ^Input_Set) {
+process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
+	input: bit_set[Play_Input]
+
 	// Read input
-	for entry in INPUT_MAP {
+	for entry in PLAY_INPUT_MAP {
 		switch entry.input {
-		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit:
+		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit, .Goto_Menu:
 			if rl.IsKeyPressed(entry.key) {
-				input^ += {entry.input}
+				input += {entry.input}
 			}
 
 		case .Shift_Left, .Shift_Right, .Rotate_CCW, .Rotate_CW:
-			delay_and_repeat_input(input, entry.key, entry.input)
+			delay_and_repeat_input(s, &input, entry.key, entry.input)
 
 		// Down input is a flag, toggling super gravity
 		case .Drop:
 			if rl.IsKeyDown(entry.key) {
-				input^ += {entry.input}
+				input += {entry.input}
 			}
 		}
 	}
 
-	// Apply some inputs here
-	if .Toggle_Debug in input do g.debug = !g.debug
+	// tmp
+	if rl.IsKeyPressed(.G) {
+		s.is_game_over = true
+	}
 
-	
+	if s.is_game_over && .Goto_Menu in input {
+		pr("transition scene to menu")
+		transition_scene(.Menu)
+	}
+
+	return input
 }
  
 // Run once: allocate, set global variable immutable values
@@ -628,35 +396,45 @@ setup :: proc() {
 	g^ = Game_Memory {
 		resman = resman,
 	}
-	g.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
-	g.input_repeat_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_repeat_delay_timer")
-	g.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 }
 
 // clear collections, set initial values
 init :: proc() {
 	g.game_state = .Play
 	g.debug = false
-	set_timer_duration(&g.entry_delay_timer, ARE_FRAMES)
-	reset_timer(&g.entry_delay_timer)
-	g.tetramino = {}
-	g.score = 0
-	g.level = 0
-	g.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], g.level)
-	g.fall_frames = 0
-	g.show_lines_cleared_flash = true
-	g.lines_cleared_accum = 0
-	reset_timer(&g.input_repeat_delay_timer)
-	reset_timer(&g.input_repeat_timer)
+	transition_scene(.Play)
+}
 
-	sa.clear(&g.lines_just_cleared_y_positions)
-	sa.clear(&g.block_render_data)
-	clear_playfield()
+init_menu_scene :: proc(s: ^Menu_Scene) {
+	s.selected_game_type = .A
+	s.selected_music_type = .A
+	s.is_hard_mode_selected = false
+}
+
+init_play_scene :: proc(s: ^Play_Scene) {
+	set_timer_duration(&s.entry_delay_timer, ARE_FRAMES)
+	reset_timer(&s.entry_delay_timer)
+	s.tetramino = {}
+	s.score = 0
+	s.level = 0
+	s.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], s.level)
+	s.fall_frames = 0
+	s.show_lines_cleared_flash = true
+	s.lines_cleared_accum = 0
+	reset_timer(&s.input_repeat_delay_timer)
+	reset_timer(&s.input_repeat_timer)
+
+	sa.clear(&s.lines_just_cleared_y_positions)
+	sa.clear(&s.block_render_data)
+	clear_playfield(s)
 	log.info("Initialization done.")
 
-	update_preview_tetra()
-	starting_tetra_type := roll_start_game()
-	spawn_tetramino(starting_tetra_type)
+	update_preview_tetra(s)
+	starting_tetra_type := roll_start_game(s^)
+	spawn_tetramino(starting_tetra_type, {}, s)
+	s.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
+	s.input_repeat_delay_timer = create_timer(DAS_FRAMES, .One_Shot, .Tick, 1, "input_repeat_delay_timer")
+	s.entry_delay_timer = create_timer(ARE_FRAMES, .One_Shot, .Tick, 1, "entry_delay")
 }
 
 draw_sprite :: proc(texture_id: Texture_ID, pos: Position, size: Vec2, rotation: f32 = 0, scale: f32 = 1, tint: rl.Color = rl.WHITE) {
@@ -770,16 +548,16 @@ is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
 }
 
-clear_playfield :: proc() {
+clear_playfield :: proc(s: ^Play_Scene) {
 	for y in 0..<PLAYFIELD_BLOCK_H {
 		for x in 0..<PLAYFIELD_BLOCK_W {
-			g.playfield.blocks[y][x] = .None
+			s.playfield.blocks[y][x] = .None
 		}
 	}
 }
 
-set_playfield_block :: proc(x: i32, y: i32, tetra_type: Tetramino_Type) {
-	g.playfield.blocks[y][x] = tetra_type
+set_playfield_block :: proc(s: ^Play_Scene, x: i32, y: i32, tetra_type: Tetramino_Type) {
+	s.playfield.blocks[y][x] = tetra_type
 }
 
 get_current_frames_per_row :: proc(table: []i32, level: i32) -> i32 {
@@ -795,16 +573,16 @@ calc_points :: proc(level: i32, n_lines_cleared: i32) -> i32 {
 	} 
 }
 
-should_level_increase :: proc() -> bool {
-	if (g.lines_cleared_accum >= (g.level + 1) * LINES_PER_LEVEL) {
+should_level_increase :: proc(lines_cleared_accum: i32, level: i32) -> bool {
+	if (lines_cleared_accum >= (level + 1) * LINES_PER_LEVEL) {
 		return true
 	}
 	return false
 }
 
-eval_lines_cleared :: proc() -> sa.Small_Array(PLAYFIELD_BLOCK_H, i32) {
+eval_lines_cleared :: proc(blocks: Playfield_Blocks) -> sa.Small_Array(PLAYFIELD_BLOCK_H, i32) {
 	y_positions_cleared: sa.Small_Array(PLAYFIELD_BLOCK_H, i32)
-	for row, y in g.playfield.blocks {
+	for row, y in blocks {
 		is_continuous_blocks := true
 		for val in row {
 			if val == .None {
@@ -819,9 +597,9 @@ eval_lines_cleared :: proc() -> sa.Small_Array(PLAYFIELD_BLOCK_H, i32) {
 	return y_positions_cleared
 }
 
-randomize_tetra_type :: proc() -> Tetramino_Type {
+randomize_tetra_type :: proc(s: Play_Scene) -> Tetramino_Type {
 	tetra_type := roll_eight()
-	if tetra_type == .None || tetra_type == g.preview_tetra.type {
+	if tetra_type == .None || tetra_type == s.preview_tetra.type {
 		tetra_type = roll_seven()
 	}
 	return tetra_type
@@ -847,9 +625,9 @@ roll_seven :: proc() -> Tetramino_Type {
 }
 
 // never deals an S, Z or O as the first piece, to avoid a forced overhang (S,Z) and give flexibility (O)
-roll_start_game :: proc() -> Tetramino_Type {
+roll_start_game :: proc(s: Play_Scene) -> Tetramino_Type {
 	for {
-		if t := rand.choice(START_TETRA_CHOICE[:]); t != g.preview_tetra.type {
+		if t := rand.choice(START_TETRA_CHOICE[:]); t != s.preview_tetra.type {
 			return t
 		}
 	}
@@ -875,38 +653,510 @@ draw_block_border :: proc(x, y, w, h: f32, color: rl.Color) {
 		rl.DrawRectangleLinesEx({x ,y, w, h}, 1, color)
 }
 
-update_preview_tetra :: proc() {
-	tetra_type := randomize_tetra_type()
+update_preview_tetra :: proc(s: ^Play_Scene) {
+	tetra_type := randomize_tetra_type(s^)
 	tetra: Tetramino
 	init_tetra(&tetra, tetra_type)
-	g.preview_tetra = tetra
+	s.preview_tetra = tetra
 }
 
-delay_and_repeat_input :: proc(input_set: ^Input_Set, key: rl.KeyboardKey, input: Input) {
+init_tetra :: proc(tetra: ^Tetramino, type: Tetramino_Type) {
+	tetra^ = Tetramino{
+		type = type,
+		layout = get_layout(type, 0),
+		layout_field_position = {3,0},
+		color = TETRA_COLORS[type],
+	}
+}
+
+spawn_tetramino :: proc(type: Tetramino_Type, layout_pos: Position = {0,0}, play_scene: ^Play_Scene) {
+	if play_scene.tetramino.type != .None {
+		log.error("Cannot spawn tetramino when one currently exists")
+		return
+	}
+	t: Tetramino
+	init_tetra(&t, type)
+	play_scene.tetramino = t
+	play_scene.fall_frames = 0 // reset fall "timer"
+}
+
+// get tile and check OOB
+get_playfield_block :: proc(x: i32, y: i32, blocks: Playfield_Blocks) -> (Tetramino_Type, bool) {
+	if x < 0 || x >= PLAYFIELD_BLOCK_W || y < 0 || y >= PLAYFIELD_BLOCK_H {
+		return .None, false
+	}
+	return blocks[y][x], true
+}
+
+// Returns 4 blocks as a rule, otherwise remains a usable zero valued array
+get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_position: Position) -> [TETRAMINO_BLOCKS_PER_LAYOUT]Position {
+	idx := 0
+	new_tetramino_positions: [TETRAMINO_BLOCKS_PER_LAYOUT]Position
+	for row, layout_local_y in layout {
+		for val, layout_local_x in row {
+			if val != 0 {
+				new_tetramino_positions[idx] = Position{
+						layout_field_position.x + i32(layout_local_x), 
+						layout_field_position.y + i32(layout_local_y)
+					}
+				idx += 1
+			}
+		}
+	}
+	return new_tetramino_positions
+}
+
+delay_and_repeat_input :: proc(s: ^Play_Scene, input_set: ^bit_set[Play_Input], key: rl.KeyboardKey, input: Play_Input) {
 	if rl.IsKeyDown(key) {
-		process_timer(&g.input_repeat_delay_timer)
-		process_timer(&g.input_repeat_timer)
+		process_timer(&s.input_repeat_delay_timer)
+		process_timer(&s.input_repeat_timer)
 
 		// Kickoff input delay timer
-		if g.input_repeat_delay_timer.state == .Inactive && g.input_repeat_timer.state != .Running {
+		if s.input_repeat_delay_timer.state == .Inactive && s.input_repeat_timer.state != .Running {
 			input_set^ += {input}
-			restart_timer(&g.input_repeat_delay_timer)
+			restart_timer(&s.input_repeat_delay_timer)
 		}
 
 		// Kickoff input repeat timer, apply input once
-		if is_timer_done(g.input_repeat_delay_timer) && g.input_repeat_timer.state == .Inactive {
+		if is_timer_done(s.input_repeat_delay_timer) && s.input_repeat_timer.state == .Inactive {
 			input_set^ += {input}
-			start_timer(&g.input_repeat_timer)
+			start_timer(&s.input_repeat_timer)
 		}
 
 		// Apply repeat input
-		if is_timer_done(g.input_repeat_timer) {
+		if is_timer_done(s.input_repeat_timer) {
 			input_set^ += {input}
-			restart_timer(&g.input_repeat_timer)
+			restart_timer(&s.input_repeat_timer)
 		}
 	}
 	if rl.IsKeyReleased(key) {
-		reset_timer(&g.input_repeat_delay_timer)
-		reset_timer(&g.input_repeat_timer)
+		reset_timer(&s.input_repeat_delay_timer)
+		reset_timer(&s.input_repeat_timer)
 	}
+}
+
+Scene_Type :: enum {
+	Menu,
+	Play,
+}
+
+Menu_Scene :: struct {
+	selected_game_type: Game_Type,
+	selected_music_type: Music_Type,
+	is_hard_mode_selected: bool,
+}
+
+Game_Type :: enum { A, B }
+Music_Type :: enum { A, B, C, D }
+
+Play_Scene :: struct {
+	playfield: Playfield,
+	tetramino: Tetramino,
+	level: i32,
+	score: i32,
+
+	block_render_data: sa.Small_Array(PLAYFIELD_BLOCK_W * PLAYFIELD_BLOCK_H, Block_Render_Data),
+	input_repeat_delay_timer: Timer, // DAS
+	input_repeat_timer: Timer, // ARR
+	input: bit_set[Play_Input],
+
+	fall_frames: i32,
+
+	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
+	show_lines_cleared_flash: bool,
+	lines_cleared_accum: i32,
+	entry_delay_timer: Timer, // ARE
+
+	level_drop_rate: i32,
+
+	// For randomizer, reroll if 1st roll results in same previous tetra
+	previous_tetra_type: Tetramino_Type,
+	preview_tetra: Tetramino,
+
+	is_game_over: bool,
+}
+
+Scene :: union {
+	Menu_Scene,
+	Play_Scene,
+}
+
+update_scene :: proc(scene: ^Scene, next_scene: ^Maybe(Scene_Type), dt: f32) {
+	switch &s in scene {
+	case Play_Scene:
+		update_play_scene(&s)
+	case Menu_Scene:
+		update_menu_scene(&s)
+	}
+}
+
+draw_scene :: proc(scene: ^Scene) {
+	switch &s in scene {
+	case Play_Scene:
+		draw_play_scene(&s)
+	case Menu_Scene:
+		draw_menu_scene(&s)
+	}
+}
+
+draw_menu_scene :: proc(s: ^Menu_Scene) {
+	rl.BeginDrawing()
+	rl.ClearBackground(BACKGROUND_COLOR)
+
+	rl.BeginMode2D(game_camera())
+	rl.DrawText("Menu Scene", 10, 10, 11, rl.BLACK)
+
+	gt := fmt.ctprintf("Game Type: %v", s.selected_game_type)
+	rl.DrawText(gt, 10, 20, 11, rl.BLACK)
+
+	mt := fmt.ctprintf("Music Type: %v", s.selected_music_type)
+	rl.DrawText(mt, 10, 30, 11, rl.BLACK)
+
+	rl.DrawText("SPACE TO START", 10, 50, 11, rl.BLACK)
+
+	rl.EndMode2D()
+	rl.EndDrawing()
+}
+
+update_play_scene :: proc(s: ^Play_Scene) {
+	// TODO: rename to appropriate nomenclature, check for collision before moving
+	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
+
+	input := process_input_play_scene(s)
+
+	if s.is_game_over {
+		return
+	}
+
+	// CSDR
+	// if g.tetramino != {} {
+	// 	update_tetramino()
+	// }
+
+	old_tetra_positions := get_tetramino_field_positions(s.tetramino.layout, s.tetramino.layout_field_position)
+
+	if s.tetramino.type != .None {
+		intended_move_x: i8
+		intended_rotation: i8
+		switch {
+		case .Shift_Left in input:
+			intended_move_x = -1
+		case .Shift_Right in input:
+			intended_move_x = 1
+		case .Rotate_CCW in input:
+			intended_rotation = -1
+		case .Rotate_CW in input:
+			intended_rotation = 1
+		case:
+			intended_move_x = 0
+			intended_rotation = 0
+		}
+
+		// Check if can move in x
+		if intended_move_x != 0 {
+			can_move_x := true
+			for pos in old_tetra_positions {
+				intended_x := pos.x + i32(intended_move_x)
+				if tetra_type, in_bounds := get_playfield_block(intended_x, i32(pos.y), s.playfield.blocks); !in_bounds || tetra_type != .None {
+					can_move_x = false
+					break
+				}
+			}
+			if can_move_x {
+				s.tetramino.layout_field_position.x += i32(intended_move_x)
+				play_sound(.Shift)
+			}
+		}
+
+		// Check if can rotate
+		if intended_rotation != 0 {
+			intended_layout: Tetramino_Layout
+			intended_layout_idx: int
+			if intended_rotation == 1 {
+				intended_layout, intended_layout_idx = get_next_layout(s.tetramino) 
+			} else if intended_rotation == -1 {
+				intended_layout, intended_layout_idx = get_previous_layout(s.tetramino)
+			}
+
+			intended_positions := get_tetramino_field_positions(intended_layout, s.tetramino.layout_field_position)
+			can_rotate := true
+			for intended_position in intended_positions {
+				if tetra_type, in_bounds := get_playfield_block(intended_position.x, intended_position.y, s.playfield.blocks); !in_bounds || tetra_type != .None {
+					can_rotate = false
+					break
+				}
+			}
+
+			if can_rotate {
+				s.tetramino.layout = intended_layout
+				s.tetramino.layout_idx = intended_layout_idx
+				play_sound(.Rotate)
+			}
+		}
+
+		// Drop
+		drop_rate := .Drop in input ? SUPER_DROP_RATE : s.level_drop_rate
+		if s.fall_frames < drop_rate {
+			s.fall_frames += 1
+		} else {
+			// check next down position for collision: block or ground
+			is_locked := false
+			for pos in old_tetra_positions {
+				tetra_type, in_bounds := get_playfield_block(pos.x, pos.y + 1, s.playfield.blocks)
+				if !in_bounds || tetra_type != .None {
+					is_locked = true
+					break
+				} 
+			}
+			if is_locked {
+				// locked: set the tetra in place and associated events
+
+				// create blocks at tetra locked positions
+				tetra_positions := get_tetramino_field_positions(s.tetramino.layout, s.tetramino.layout_field_position)
+				for pos in tetra_positions {
+					set_playfield_block(s, pos.x, pos.y, s.tetramino.type)
+				}
+
+				s.previous_tetra_type = s.tetramino.type
+
+				// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
+				// NOTE: other code keys off this value to signify no player controllable tetra on screen aka non-existent player tetra aka post-lock operations
+				s.tetramino = {
+					type = .None
+				}
+
+				y_positions_cleared := eval_lines_cleared(s.playfield.blocks)
+				n_lines_cleared := i32(sa.len(y_positions_cleared))
+				set_timer_duration(&s.entry_delay_timer, n_lines_cleared > 0 ? ARE_CLEAR_FRAMES : ARE_FRAMES)
+				restart_timer(&s.entry_delay_timer)
+				s.lines_just_cleared_y_positions = y_positions_cleared
+
+				// TODO: lines cleared animation
+				// toggle show_blocks_cleared bool for all cleared blocks
+				// use y_positions_cleared -> store in global
+				// TODO: remove lines
+
+				// update score
+				if n_lines_cleared > 0 {
+					s.score += calc_points(s.level, n_lines_cleared)
+				}
+				play_sound(.Lock)
+				if n_lines_cleared > 0 {
+					play_sound(.Clear)
+				}
+			} else {
+				// fall
+				s.tetramino.layout_field_position.y += 1
+			}
+			s.fall_frames = 0
+		}
+	}
+
+
+	// locked interlude processing
+	if s.tetramino.type == .None  {
+		if is_timer_done(s.entry_delay_timer) {
+			reset_timer(&s.entry_delay_timer)
+
+			n_lines_cleared := sa.len(s.lines_just_cleared_y_positions)
+			s.lines_cleared_accum += i32(n_lines_cleared)
+			// update lines_cleared and preview here
+			if should_level_increase(s.lines_cleared_accum, s.level) {
+				s.level += 1
+				s.level_drop_rate = get_current_frames_per_row(LEVEL_DROP_RATES[:], s.level)
+				play_sound(.Level)
+			}
+
+			// shift playfield down
+			for y_to_clear in sa.slice(&s.lines_just_cleared_y_positions) {
+				// cleared_y_positions naturally ordered correctly
+				// starting from cleared_y_position - 1, copy into row below
+				for y := y_to_clear; y >= 1; y -= 1 {
+					s.playfield.blocks[y] = s.playfield.blocks[y-1]
+				}
+			}
+
+			if sa.len(s.lines_just_cleared_y_positions) > 0 {
+				sa.clear(&s.lines_just_cleared_y_positions)
+				s.show_lines_cleared_flash = true
+			}
+
+			// spawn with preview tetra
+			spawn_tetramino(s.preview_tetra.type, {}, s)
+
+			// update next preview tetra
+			update_preview_tetra(s)
+
+			return
+		}
+		// animate lines_cleared state
+		if int(get_timer_accum(s.entry_delay_timer)) % LINE_CLEAR_ANIMATION_FRAME_INTERVAL == 0 {
+			s.show_lines_cleared_flash = !s.show_lines_cleared_flash
+		}
+		process_timer(&s.entry_delay_timer)
+	}
+
+	// move new tetra based on layout_field_pos delta
+	new_tetramino_positions := get_tetramino_field_positions(s.tetramino.layout, s.tetramino.layout_field_position)
+
+	sa.clear(&s.block_render_data)
+	for row, field_y in s.playfield.blocks {
+		for block_type, field_x in row {
+
+			// tetramino data
+			if s.tetramino.type != .None {
+				is_occupied_by_tetra := false
+				for tetra_field_pos in new_tetramino_positions {
+					if tetra_field_pos.y == i32(field_y) && tetra_field_pos.x == i32(field_x) {
+						sa.append(&s.block_render_data, Block_Render_Data{
+							x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+							y = f32(field_y) * BLOCK_PIXEL_SIZE,
+							w = BLOCK_PIXEL_SIZE,
+							h = BLOCK_PIXEL_SIZE,
+							color = TETRA_COLORS[s.tetramino.type],
+							border_color = rl.BLACK,
+							highlight_color = rl.RAYWHITE,
+						})
+						is_occupied_by_tetra = true
+					}
+				} 
+				if is_occupied_by_tetra do continue
+			}
+
+			// playfield data and conditional render for animating cleared lines
+			if block_type != .None {
+				is_block_in_cleared_row := false
+				for y in sa.slice(&s.lines_just_cleared_y_positions) {
+					if i32(field_y) == y {
+						is_block_in_cleared_row = true
+						break
+					}
+				}
+
+				if !is_block_in_cleared_row || (is_block_in_cleared_row && s.show_lines_cleared_flash) {
+					sa.append(&s.block_render_data, Block_Render_Data{
+						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+						y = f32(field_y) * BLOCK_PIXEL_SIZE,
+						w = BLOCK_PIXEL_SIZE,
+						h = BLOCK_PIXEL_SIZE,
+						color = TETRA_COLORS[block_type],
+						border_color = rl.BLACK,
+						highlight_color = rl.RAYWHITE,
+					})
+				} else if is_block_in_cleared_row && !s.show_lines_cleared_flash {
+					sa.append(&s.block_render_data, Block_Render_Data{
+						x = PLAYFIELD_BORDER_THICKNESS + f32(field_x) * BLOCK_PIXEL_SIZE,
+						y = f32(field_y) * BLOCK_PIXEL_SIZE,
+						w = BLOCK_PIXEL_SIZE,
+						h = BLOCK_PIXEL_SIZE,
+						color = LINE_CLEAR_FLASH_COLOR,
+						border_color = LINE_CLEAR_FLASH_COLOR,
+						highlight_color = LINE_CLEAR_FLASH_COLOR,
+					})
+				}
+			}
+		}
+	}
+}
+
+transition_scene :: proc(next: Scene_Type) {
+	pr("TRANSITION TO NEXT:", next)
+	switch next {
+	case .Play:
+		play_scene := Play_Scene{}
+		init_play_scene(&play_scene)
+		g.scene = play_scene
+	case .Menu:
+		menu_scene := Menu_Scene{}
+		init_menu_scene(&menu_scene)
+		g.scene = menu_scene
+		pr("set scene to Mneu")
+	}
+}
+
+update_menu_scene :: proc(s: ^Menu_Scene) {
+	// pr("update menu")
+	process_input_menu_scene(s)
+}
+
+Menu_Input :: enum {
+	Select_Next_Game_Type,
+	Select_Previous_Game_Type,
+	Select_Next_Music_Type,
+	Select_Previous_Music_Type,
+	Toggle_Hard_Mode,
+	Goto_Play,
+}
+
+MENU_INPUT_MAP := [?]Input_Map_Entry(Menu_Input){
+	{.Select_Next_Game_Type, .RIGHT},
+	{.Select_Previous_Game_Type, .LEFT},
+	{.Select_Next_Music_Type, .DOWN},
+	{.Select_Previous_Music_Type, .UP},
+	{.Toggle_Hard_Mode, .H},
+	{.Goto_Play, .SPACE}, // TODO: if set to ENTER, seems to read the Enter input from Play's Game_Over. Issue even when update_scene put before the update frame's call to transition_scene. Thought about clearing raylib inputs, but cannot do it.
+}
+
+process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
+	// pr("IN PROC INPUT MENU")
+	// Read input
+	input: bit_set[Menu_Input]
+	for entry in MENU_INPUT_MAP {
+		switch entry.input {
+		case .Select_Next_Game_Type, .Select_Previous_Game_Type, .Select_Next_Music_Type, .Select_Previous_Music_Type, .Toggle_Hard_Mode, .Goto_Play:
+			if rl.IsKeyPressed(entry.key) {
+				input += {entry.input}
+			}
+		}
+	}
+
+	// Apply input
+	if .Select_Next_Game_Type in input {
+		switch s.selected_game_type {
+		case .A:
+			s.selected_game_type = .B
+		case .B:
+			s.selected_game_type = .A
+		}
+		pr("game_type", s.selected_game_type)
+	} else if .Select_Previous_Game_Type in input {
+		switch s.selected_game_type {
+		case .A:
+			s.selected_game_type = .B
+		case .B:
+			s.selected_game_type = .A
+		}
+		pr("game_type", s.selected_game_type)
+	} else if .Select_Next_Music_Type in input {
+		switch s.selected_music_type {
+		case .A:
+			s.selected_music_type = .B
+		case .B:
+			s.selected_music_type = .C
+		case .C:
+			s.selected_music_type = .D
+		case .D:
+			s.selected_music_type = .A
+		}
+		pr("music_type", s.selected_music_type)
+	} else if .Select_Previous_Music_Type in input {
+		switch s.selected_music_type {
+		case .A:
+			s.selected_music_type = .D
+		case .B:
+			s.selected_music_type = .A
+		case .C:
+			s.selected_music_type = .B
+		case .D:
+			s.selected_music_type = .C
+		}
+		pr("music_type", s.selected_music_type)
+	} else if .Toggle_Hard_Mode in input {
+		s.is_hard_mode_selected = !s.is_hard_mode_selected
+	} else if .Goto_Play in input {
+		pr("detected GotoPlay")
+		g.next_scene = .Play
+	}
+
+	return input
 }
