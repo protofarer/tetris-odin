@@ -289,6 +289,30 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 		rl.DrawText("AGAIN", 25, y2, 12, rl.BLACK)
 		y2 += 15
 		rl.DrawText("HIT ENTER", 25, y2, 12, rl.BLACK)
+	} else if s.is_game_won {
+		y1 :i32 = 25
+		r := rl.Rectangle{32-3, f32(y1)-3, 40, 35}
+		rl.DrawRectangleRounded(r, 0.1, 3, rl.Color{255,255,255,192})
+
+		rl.DrawText("YOU", 35, y1, 12, rl.BLACK)
+		y1 += 15
+		rl.DrawText("WIN!", 35, y1, 12, rl.BLACK)
+
+		y2 :i32= 75
+		r2 := rl.Rectangle{23-3, f32(y2)-3, 65, 40}
+		rl.DrawRectangleRounded(r2, 0.1, 3, rl.Color{255,255,255,192})
+		rl.DrawText("CLEARED ", 25, y2, 12, rl.BLACK)
+		y2 += 10
+		rl.DrawText("25", 25, y2, 12, rl.BLACK)
+		y2 += 10
+		rl.DrawText("LINES", 25, y2, 12, rl.BLACK)
+		y2 += 25
+
+		r3 := rl.Rectangle{15-3, f32(y2)-3, 95, 30}
+		rl.DrawRectangleRounded(r3, 0.1, 3, rl.Color{255,255,255,192})
+		rl.DrawText("HIT ENTER TO" , 15, y2, 12, rl.BLACK)
+		y2 += 10
+		rl.DrawText("PLAY AGAIN" , 15, y2, 12, rl.BLACK)
 	}
 
 	// Debug
@@ -385,8 +409,13 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 	if rl.IsKeyPressed(.G) {
 		s.is_game_over = true
 	}
+	if rl.IsKeyPressed(.T) {
+		s.is_game_won = true
+	}
 
 	if s.is_game_over && .Goto_Menu in input {
+		transition_scene(s^, .Menu)
+	} else if s.is_game_won && .Goto_Menu in input {
 		transition_scene(s^, .Menu)
 	}
 
@@ -462,6 +491,8 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 	s.soft_drop_counter = 0
 	s.show_lines_cleared_flash = true
 	s.lines_cleared_accum = 0
+	s.is_game_over = false
+	s.is_game_won = false
 	reset_timer(&s.input_repeat_delay_timer)
 	reset_timer(&s.input_repeat_timer)
 
@@ -857,6 +888,7 @@ Play_Scene :: struct {
 	hard_mode: bool,
 
 	is_game_over: bool,
+	is_game_won: bool,
 }
 
 Scene :: union {
@@ -1040,6 +1072,9 @@ process_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 				// lines cleared points
 				if n_lines_cleared > 0 {
 					s.score += calc_points(s.level, n_lines_cleared)
+					if test_line_mode_win(s.lines_cleared_accum) {
+						s.is_game_won = true
+					}
 				}
 				play_sound(.Lock)
 				if n_lines_cleared > 0 {
@@ -1112,7 +1147,7 @@ update_play_scene :: proc(s: ^Play_Scene) {
 
 	input := process_input_play_scene(s)
 
-	if !s.is_game_over {
+	if !s.is_game_over && !s.is_game_won{
 		process_playfield(s, input)
 	}
 
@@ -1320,4 +1355,11 @@ GARBAGE_PATTERN := [MAX_GARBAGE_LEVEL * 2][10]u8 {
     { 0,1,1,1,1,0,1,0,1,1 }, // Height 7
     { 1,1,1,0,1,0,1,1,0,1 }, // Height 8
     { 0,1,0,1,1,1,0,1,1,1 }, // Height 9
+}
+
+test_line_mode_win :: proc(lines_cleared_accum: i32) -> bool {
+	if lines_cleared_accum >= 25 {
+		return true
+	}
+	return false
 }
