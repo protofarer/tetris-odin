@@ -941,7 +941,7 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 
 	switch s.submenu {
 	case .Start:
-		rl.DrawText("Menu Scene", 30, 10, 16, rl.BLACK)
+		rl.DrawText("TETRIS", 30, 10, 16, rl.BLACK)
 		gt := fmt.ctprintf("Game Type: %v", s.game_type)
 		y :i32= 30
 		rl.DrawText(gt, 10, y, 11, rl.BLACK)
@@ -952,7 +952,7 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 		y += 13
 		rl.DrawText(mt, 10, y, 11, rl.BLACK)
 		y += 40
-		rl.DrawText("ENTER TO CONFIRM", 40, y, 11, rl.BLACK)
+		rl.DrawText("ENTER TO CONFIRM", 30, y, 11, rl.BLACK)
 	case .Marathon:
 		rl.DrawText("Marathon Mode", 30, 10, 16, rl.BLACK)
 		gt := fmt.ctprintf("Start Level: %v", s.game_settings.start_level)
