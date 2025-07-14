@@ -11,4 +11,9 @@ Sound_ID :: enum {
 	Clear,
     Level,
 	Shift,
+	Music_A,
+	Music_B,
+	Music_C,
+	Game_Over,
+	Stage_Clear,
 }

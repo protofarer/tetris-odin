@@ -105,10 +105,14 @@ load_texture :: proc(rm: ^Resource_Manager, id: Texture_ID) -> Resource_Load_Res
 
 load_sound :: proc(rm: ^Resource_Manager, id: Sound_ID) -> Resource_Load_Result {
     filename := get_name_from_id(id)
-	filepath := fmt.ctprintf("%v%v.wav", rm.base_sound_path, filename)
-    sound := rl.LoadSound(filepath)
+	filepath_wav := fmt.ctprintf("%v%v.wav", rm.base_sound_path, filename)
+    sound := rl.LoadSound(filepath_wav)
     if sound.stream.buffer == nil {
-        return .File_Not_Found
+		filepath_mp3 := fmt.ctprintf("%v%v.mp3", rm.base_sound_path, filename)
+		sound = rl.LoadSound(filepath_mp3)
+		if sound.stream.buffer == nil {
+			return .File_Not_Found
+		}
     }
     rm.sounds[id] = sound
     return .Success

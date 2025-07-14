@@ -473,7 +473,8 @@ init_menu_scene :: proc(s: ^Menu_Scene) {
 		garbage_height = 0,
 		hard_mode = false,
 	}
-	s.selected_music_type = .A
+	s.music_type = .A
+	play_selected_music(s.music_type)
 	s.submenu = .Start
 	s.game_type = .Marathon
 }
@@ -493,6 +494,7 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 	s.lines_cleared_accum = 0
 	s.is_game_over = false
 	s.is_game_won = false
+	s.music_type = game_settings.music_type
 	reset_timer(&s.input_repeat_delay_timer)
 	reset_timer(&s.input_repeat_timer)
 
@@ -633,6 +635,17 @@ play_sound :: proc(id: Sound_ID) {
 
 is_sound_playing :: proc(id: Sound_ID) -> bool {
     return rl.IsSoundPlaying(get_sound(id))
+}
+
+stop_sound :: proc(id: Sound_ID) {
+	rl.StopSound(get_sound(id))
+}
+
+restart_sound :: proc(id: Sound_ID) {
+	if is_sound_playing(id) {
+		stop_sound(id)
+	}
+	play_sound(id)
 }
 
 clear_playfield :: proc(s: ^Play_Scene) {
@@ -833,8 +846,7 @@ Scene_Type :: enum {
 }
 
 Menu_Scene :: struct {
-	game_settings: Game_Settings,
-	selected_music_type: Music_Type,
+	using game_settings: Game_Settings,
 	submenu: Submenu,
 	game_type: Game_Type,
 }
@@ -854,9 +866,10 @@ Game_Settings :: struct {
 	start_level: i32,
 	garbage_height: i32,
 	hard_mode: bool,
+	music_type: Music_Type,
 }
 
-Music_Type :: enum { A, B, C, D }
+Music_Type :: enum { A, B, C }
 
 Play_Scene :: struct {
 	playfield: Playfield,
@@ -889,6 +902,7 @@ Play_Scene :: struct {
 
 	is_game_over: bool,
 	is_game_won: bool,
+	music_type: Music_Type,
 }
 
 Scene :: union {
@@ -934,7 +948,7 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 		ht := fmt.ctprintf("Hard Mode: %v", s.game_settings.hard_mode ? "ON" : "OFF")
 		y += 13
 		rl.DrawText(ht, 10, y, 11, rl.BLACK)
-		mt := fmt.ctprintf("Music Type: %v", s.selected_music_type)
+		mt := fmt.ctprintf("Music Type: %v", s.music_type)
 		y += 13
 		rl.DrawText(mt, 10, y, 11, rl.BLACK)
 		y += 40
@@ -1100,7 +1114,8 @@ process_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 			if should_level_increase(s.lines_cleared_accum, s.level, s.start_level) {
 				s.level += 1
 				s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
-				play_sound(.Level)
+				// play_sound(.Level)
+				play_sound(.Stage_Clear)
 			}
 
 			// shift playfield down
@@ -1142,13 +1157,27 @@ process_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 }
 
 update_play_scene :: proc(s: ^Play_Scene) {
-	// TODO: rename to appropriate nomenclature, check for collision before moving
-	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
-
 	input := process_input_play_scene(s)
 
 	if !s.is_game_over && !s.is_game_won{
 		process_playfield(s, input)
+	}
+
+	// play game win sound
+	if s.is_game_won && is_sound_playing(get_music_id_from_music_type(s.music_type)){
+		stop_sound(get_music_id_from_music_type(s.music_type))
+		play_sound(.Stage_Clear)
+	}
+
+	// play game over sound
+	if s.is_game_over && is_sound_playing(get_music_id_from_music_type(s.music_type)) {
+		stop_sound(get_music_id_from_music_type(s.music_type))
+		play_sound(.Game_Over)
+	}
+
+	// loop music
+	if !is_sound_playing(get_music_id_from_music_type(s.music_type)) && (!s.is_game_won && !s.is_game_over) {
+		play_selected_music(s.music_type)
 	}
 
 	// move new tetra based on layout_field_pos delta
@@ -1235,6 +1264,10 @@ transition_scene :: proc(curr_scene: Scene, next_scene_type: Scene_Type) {
 
 update_menu_scene :: proc(s: ^Menu_Scene) {
 	process_input_menu_scene(s)
+
+	if !is_sound_playing(get_music_id_from_music_type(s.music_type)) {
+		play_selected_music(s.music_type)
+	}
 }
 
 Menu_Input :: enum {
@@ -1286,17 +1319,17 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 		pr("game_type", s.game_type)
 	} else if .Down in input {
 		if s.submenu == .Start {
-			switch s.selected_music_type {
+			stop_sound(get_music_id_from_music_type(s.music_type))
+			switch s.music_type {
 			case .A:
-				s.selected_music_type = .B
+				s.music_type = .B
 			case .B:
-				s.selected_music_type = .C
+				s.music_type = .C
 			case .C:
-				s.selected_music_type = .D
-			case .D:
-				s.selected_music_type = .A
+				s.music_type = .A
 			}
-			pr("music_type", s.selected_music_type)
+			play_selected_music(s.music_type)
+			pr("music_type", s.music_type)
 
 		} else if s.submenu == .Marathon {
 			s.game_settings.start_level = max(s.game_settings.start_level-1, MIN_START_LEVEL)
@@ -1306,17 +1339,17 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 		}
 	} else if .Up in input {
 		if s.submenu == .Start {
-			switch s.selected_music_type {
+			stop_sound(get_music_id_from_music_type(s.music_type))
+			switch s.music_type {
 			case .A:
-				s.selected_music_type = .D
+				s.music_type = .C
 			case .B:
-				s.selected_music_type = .A
+				s.music_type = .A
 			case .C:
-				s.selected_music_type = .B
-			case .D:
-				s.selected_music_type = .C
+				s.music_type = .B
 			}
-			pr("music_type", s.selected_music_type)
+			play_selected_music(s.music_type)
+			pr("music_type", s.music_type)
 
 		} else if s.submenu == .Marathon {
 			s.game_settings.start_level = min(s.game_settings.start_level+1, MAX_START_LEVEL)
@@ -1363,3 +1396,22 @@ test_line_mode_win :: proc(lines_cleared_accum: i32) -> bool {
 	}
 	return false
 }
+
+play_selected_music :: proc(music_type: Music_Type) {
+	id := get_music_id_from_music_type(music_type)
+	restart_sound(id)
+}
+
+get_music_id_from_music_type :: proc(music_type: Music_Type) -> Sound_ID {
+	switch music_type {
+	case .A:
+		return .Music_A
+	case .B:
+		return .Music_B
+	case .C:
+		return .Music_C
+	case:
+		return .Music_A
+	}
+}
+
