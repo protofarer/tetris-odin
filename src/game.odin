@@ -212,10 +212,6 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 		PIXEL_WINDOW_HEIGHT
 	}
 	rl.DrawTexturePro(tex_border, src_border, dst_border_2, {}, 0, rl.RAYWHITE)
-	// rl.DrawRectangle(
-	// 	PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
-	// 	PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.BLUE
-	// )
 
 	// Playfield + Tetra
 	for brd in sa.slice(&s.block_render_data) {
@@ -242,7 +238,9 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 	// rl.DrawRectangle(LEVEL_LABEL_POS.x-3, LEVEL_LABEL_POS.y-3, 45, 23, rl.WHITE)
 	rl.DrawText("LEVEL", LEVEL_LABEL_POS.x, LEVEL_LABEL_POS.y, 10, rl.BLACK)
 	rl.DrawText(fmt.ctprint(s.level), LEVEL_VALUE_POS.x, LEVEL_VALUE_POS.y, 10, rl.BLACK)
-	rl.DrawText("H", LEVEL_VALUE_POS.x+30, LEVEL_VALUE_POS.y, 10, rl.BLACK)
+	if s.hard_mode {
+		rl.DrawText("H", LEVEL_VALUE_POS.x+30, LEVEL_VALUE_POS.y, 10, rl.BLACK)
+	}
 
 	LINES_LABEL_POS :: Vec2i{PANEL_X + 5, 80}
 	LINES_VALUE_POS :: Vec2i{LINES_LABEL_POS.x, LINES_LABEL_POS.y + 10}
@@ -313,6 +311,7 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 
 Play_Input :: enum {
 	Drop,
+	Drop_Release,
 	Shift_Left,
 	Shift_Right,
 	Rotate_CCW,
@@ -322,6 +321,9 @@ Play_Input :: enum {
 	Exit,
 	Toggle_Debug,
 	Goto_Menu,
+	Debug_Increase_Level,
+	Debug_Decrease_Level,
+	Debug_Toggle_Hard_Mode,
 }
 
 Input_Map_Entry :: struct ($T: typeid) {
@@ -337,12 +339,16 @@ PLAY_INPUT_MAP := [?]Input_Map_Entry(Play_Input){
 	{.Rotate_CCW, .Z},
 	{.Rotate_CW, .X},
 	{.Drop, .S},
+	{.Drop_Release, .S},
 	{.Shift_Left, .A},
 	{.Shift_Right, .D},
 	{.Toggle_Music, .M},
 	{.Toggle_Preview, .P},
 	{.Exit, .ESCAPE},
-	{.Goto_Menu, .ENTER}
+	{.Goto_Menu, .ENTER},
+	{.Debug_Increase_Level, .EQUAL},
+	{.Debug_Decrease_Level, .MINUS},
+	{.Debug_Toggle_Hard_Mode, .ZERO},
 }
 
 process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
@@ -351,7 +357,7 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 	// Read input
 	for entry in PLAY_INPUT_MAP {
 		switch entry.input {
-		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit, .Goto_Menu:
+		case .Toggle_Debug, .Toggle_Music, .Toggle_Preview, .Exit, .Goto_Menu, .Debug_Increase_Level, .Debug_Decrease_Level, .Debug_Toggle_Hard_Mode:
 			if rl.IsKeyPressed(entry.key) {
 				input += {entry.input}
 			}
@@ -364,7 +370,15 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 			if rl.IsKeyDown(entry.key) {
 				input += {entry.input}
 			}
+		case .Drop_Release:
+			if rl.IsKeyReleased(entry.key) {
+				input += {entry.input}
+			}
 		}
+	}
+
+	if !(.Drop in input) {
+		s.soft_drop_counter = 0
 	}
 
 	// tmp
@@ -373,13 +387,27 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 	}
 
 	if s.is_game_over && .Goto_Menu in input {
-		pr("transition scene to menu")
 		transition_scene(s^, .Menu)
 	}
 
+	if .Debug_Increase_Level in input {
+		if s.level + 1 < 20 {
+			s.level += 1
+			s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
+			play_sound(.Level)
+		}
+	} else if .Debug_Decrease_Level in input {
+		if s.level - 1 > 0 {
+			s.level -= 1
+			s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
+			play_sound(.Level)
+		}
+	} else if .Debug_Toggle_Hard_Mode in input {
+		s.hard_mode = !s.hard_mode
+	}
 	return input
 }
- 
+
 // Run once: allocate, set global variable immutable values
 setup :: proc() {
 	context.logger = log.create_console_logger(nil, {
@@ -406,7 +434,7 @@ setup :: proc() {
 // clear collections, set initial values
 init :: proc() {
 	g.game_state = .Play
-	g.debug = false
+	g.debug = true
 	transition_scene({}, .Menu)
 }
 
@@ -431,6 +459,7 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 	s.hard_mode = game_settings.hard_mode
 	s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, game_settings.hard_mode)
 	s.fall_frames = 0
+	s.soft_drop_counter = 0
 	s.show_lines_cleared_flash = true
 	s.lines_cleared_accum = 0
 	reset_timer(&s.input_repeat_delay_timer)
@@ -443,18 +472,14 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 	// TODO: fill garbage height
 	// 2 * garbage_height,
 	// shift garbage pattern to right, use a cursor
-	cursor := 0
 	for y in 0..<2*s.garbage_height {
-		row := GARBAGE_PATTERN
-		row_len := len(GARBAGE_PATTERN)
+		row := GARBAGE_PATTERN[y]
 		for x in 0..<PLAYFIELD_BLOCK_W {
-			idx := cursor + x % row_len
-			if row[idx] == 1 {
+			if row[x] == 1 {
 				tt := roll_seven()
-				set_playfield_block(s, i32(x), i32(PLAYFIELD_BLOCK_H - y), tt)
+				set_playfield_block(s, i32(x), i32(PLAYFIELD_BLOCK_H - 1 - y), tt)
 			}
 		}
-		cursor += 1
 	}
 
 	s.input_repeat_timer = create_timer(ARR_FRAMES, .One_Shot, .Tick, 1, "input_repeat_timer")
@@ -588,6 +613,10 @@ clear_playfield :: proc(s: ^Play_Scene) {
 }
 
 set_playfield_block :: proc(s: ^Play_Scene, x: i32, y: i32, tetra_type: Tetramino_Type) {
+	if y < 0 || y >= PLAYFIELD_BLOCK_H || x < 0 || x >= PLAYFIELD_BLOCK_W {
+		log.warnf("Failed to set block, coord out of range. x: %v, y: %v", x, y)
+		return
+	}
 	s.playfield.blocks[y][x] = tetra_type
 }
 
@@ -810,6 +839,7 @@ Play_Scene :: struct {
 	input: bit_set[Play_Input],
 
 	fall_frames: i32,
+	soft_drop_counter: i32,
 
 	lines_just_cleared_y_positions: sa.Small_Array(PLAYFIELD_BLOCK_H, i32),
 	show_lines_cleared_flash: bool,
@@ -897,21 +927,7 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 	rl.EndDrawing()
 }
 
-update_play_scene :: proc(s: ^Play_Scene) {
-	// TODO: rename to appropriate nomenclature, check for collision before moving
-	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
-
-	input := process_input_play_scene(s)
-
-	if s.is_game_over {
-		return
-	}
-
-	// CSDR
-	// if g.tetramino != {} {
-	// 	update_tetramino()
-	// }
-
+process_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 	old_tetra_positions := get_tetramino_field_positions(s.tetramino.layout, s.tetramino.layout_field_position)
 
 	if s.tetramino.type != .None {
@@ -978,6 +994,11 @@ update_play_scene :: proc(s: ^Play_Scene) {
 		if s.fall_frames < drop_rate {
 			s.fall_frames += 1
 		} else {
+			if .Drop in input {
+				s.soft_drop_counter += 1
+				pr("incr soft drop counter, to", s.soft_drop_counter)
+			} 
+
 			// check next down position for collision: block or ground
 			is_locked := false
 			for pos in old_tetra_positions {
@@ -1010,7 +1031,13 @@ update_play_scene :: proc(s: ^Play_Scene) {
 				restart_timer(&s.entry_delay_timer)
 				s.lines_just_cleared_y_positions = y_positions_cleared
 
-				// update score
+				// soft drop points
+				if .Drop in input {
+					s.score += s.soft_drop_counter
+					s.soft_drop_counter = 0
+				}
+
+				// lines cleared points
 				if n_lines_cleared > 0 {
 					s.score += calc_points(s.level, n_lines_cleared)
 				}
@@ -1058,6 +1085,14 @@ update_play_scene :: proc(s: ^Play_Scene) {
 			// spawn with preview tetra
 			spawn_tetramino(s.preview_tetra.type, {}, s)
 
+			// test game over: if spawned tetra intersects with existing playfield block
+			for pos in get_tetramino_field_positions(s.tetramino.layout, s.tetramino.layout_field_position) {
+				if tetra_type, in_bounds := get_playfield_block(pos.x, pos.y, s.playfield.blocks); in_bounds && tetra_type != .None {
+					s.is_game_over = true
+					break
+				}
+			}
+
 			// update next preview tetra
 			update_preview_tetra(s)
 
@@ -1068,6 +1103,17 @@ update_play_scene :: proc(s: ^Play_Scene) {
 			s.show_lines_cleared_flash = !s.show_lines_cleared_flash
 		}
 		process_timer(&s.entry_delay_timer)
+	}
+}
+
+update_play_scene :: proc(s: ^Play_Scene) {
+	// TODO: rename to appropriate nomenclature, check for collision before moving
+	// WARN: unsure to do fall and input in diff frames... if in same frame, then weird diagonal moves are possible
+
+	input := process_input_play_scene(s)
+
+	if !s.is_game_over {
+		process_playfield(s, input)
 	}
 
 	// move new tetra based on layout_field_pos delta
@@ -1092,6 +1138,7 @@ update_play_scene :: proc(s: ^Play_Scene) {
 							highlight_color = rl.RAYWHITE,
 						})
 						is_occupied_by_tetra = true
+						break
 					}
 				} 
 				if is_occupied_by_tetra do continue
@@ -1134,7 +1181,6 @@ update_play_scene :: proc(s: ^Play_Scene) {
 }
 
 transition_scene :: proc(curr_scene: Scene, next_scene_type: Scene_Type) {
-	log.debug("Transitioning next scene:", next_scene_type)
 	switch next_scene_type {
 	case .Play:
 		play_scene := Play_Scene{}
@@ -1143,12 +1189,12 @@ transition_scene :: proc(curr_scene: Scene, next_scene_type: Scene_Type) {
 		game_settings := s.game_settings
 		init_play_scene(&play_scene, game_type, game_settings)
 		g.scene = play_scene
-		log.debug("set scene to play")
+		log.debug("Transition to play scene")
 	case .Menu:
 		menu_scene := Menu_Scene{}
 		init_menu_scene(&menu_scene)
 		g.scene = menu_scene
-		log.debug("set scene to Menu")
+		log.debug("Transition to menu scene")
 	}
 }
 
@@ -1263,4 +1309,15 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 }
 
 // 3 holes per row
-GARBAGE_PATTERN := [10]u8 {0,1,1,0,1,1,0,1,1,0} // Height 0
+GARBAGE_PATTERN := [MAX_GARBAGE_LEVEL * 2][10]u8 {
+    { 1,1,1,0,1,1,0,1,1,0 }, // Height 0
+    { 0,1,1,1,0,1,1,1,0,1 }, // Height 1
+    { 1,0,1,1,1,0,1,1,1,0 }, // Height 2
+    { 1,1,0,1,1,1,0,1,0,1 }, // Height 3
+    { 0,1,1,0,1,1,1,0,1,1 }, // Height 4
+    { 1,0,1,1,0,1,1,1,1,0 }, // Height 5
+    { 1,1,0,1,1,0,1,1,0,1 }, // Height 6
+    { 0,1,1,1,1,0,1,0,1,1 }, // Height 7
+    { 1,1,1,0,1,0,1,1,0,1 }, // Height 8
+    { 0,1,0,1,1,1,0,1,1,1 }, // Height 9
+}
