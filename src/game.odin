@@ -14,6 +14,7 @@ Position :: Vec2i
 WINDOW_W :: 720
 WINDOW_H :: 720
 PIXEL_WINDOW_HEIGHT :: 180
+RENDER_TEXTURE_SCALE :: 2
 TICK_RATE :: 60
 
 BLOCK_PIXEL_SIZE :: PIXEL_WINDOW_HEIGHT / PLAYFIELD_BLOCK_H
@@ -104,9 +105,14 @@ draw :: proc() {
 begin_letterbox_rendering :: proc() {
 	rl.BeginTextureMode(g.render_texture)
 	rl.ClearBackground(BACKGROUND_COLOR)
+	
+	// Scale all drawing by RENDER_TEXTURE_SCALE for higher resolution
+	camera := rl.Camera2D{zoom = RENDER_TEXTURE_SCALE}
+	rl.BeginMode2D(camera)
 }
 
 end_letterbox_rendering :: proc() {
+	rl.EndMode2D()  // End the scale transform
 	rl.EndTextureMode()
 	
 	rl.BeginDrawing()
@@ -123,7 +129,8 @@ end_letterbox_rendering :: proc() {
 	offset_y := (window_h - viewport_size) / 2
 	
 	// Draw the render texture with letterboxing
-	src := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, -PIXEL_WINDOW_HEIGHT} // negative height flips texture
+	render_texture_size: f32 = PIXEL_WINDOW_HEIGHT * RENDER_TEXTURE_SCALE
+	src := rl.Rectangle{0, 0, render_texture_size, -render_texture_size} // negative height flips texture
 	dst := rl.Rectangle{offset_x, offset_y, viewport_size, viewport_size}
 	
 	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
@@ -167,7 +174,7 @@ setup :: proc() {
 	g = new(Game_Memory)
 	g^ = Game_Memory {
 		resman = resman,
-		render_texture = rl.LoadRenderTexture(PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT),
+		render_texture = rl.LoadRenderTexture(PIXEL_WINDOW_HEIGHT * RENDER_TEXTURE_SCALE, PIXEL_WINDOW_HEIGHT * RENDER_TEXTURE_SCALE),
 	}
 }
 
