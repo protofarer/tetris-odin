@@ -1,8 +1,8 @@
 # Tetris remake with Odin and Raylib
 
-## Rules and Mechanics and Appearance:
-    - Game boy: layout + custom colors, game types, music, ARE, DAS, ARR
-    - Nintendo: rotation, scoring, soft drop, level drop rates, randomizer
+Mechanics and appearance based of early Nintendo versions:
+- Game boy: layout + custom colors, game types, music, ARE, DAS, ARR
+- Nintendo: rotation, scoring, soft drop, level drop rates, randomizer
 
 ## Resources
 - General tetris info: https://harddrop.com/wiki
