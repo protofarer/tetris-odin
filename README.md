@@ -2,7 +2,7 @@
 
 ## Rules and Mechanics and Appearance:
     - Game boy: layout + custom colors, game types, music, ARE, DAS, ARR
-    - Nintendo: rotation, scoring, soft drop, level drop rates
+    - Nintendo: rotation, scoring, soft drop, level drop rates, randomizer
 
 ## Resources
 - General tetris info: https://harddrop.com/wiki

@@ -45,7 +45,7 @@ POINTS_TABLE := [?]i32{
 	40,		// single
 	100,	// double
 	300,	// triple
-	1200	// tetris
+	1200,	// tetris
 }
 
 LINES_PER_LEVEL :: 10
@@ -68,7 +68,7 @@ Game_State :: enum {
 
 Input_Map_Entry :: struct ($T: typeid) {
 	input: T,
-	key: rl.KeyboardKey
+	key: rl.KeyboardKey,
 }
 
 Global_Input :: enum {
@@ -154,7 +154,7 @@ game_update :: proc() {
 @(export)
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
-	rl.InitWindow(WINDOW_W, WINDOW_H, "Odin Gamejam Template")
+	rl.InitWindow(WINDOW_W, WINDOW_H, "Tetris Remake")
 	rl.SetWindowPosition(500, 250)
 	rl.SetTargetFPS(TICK_RATE)
 	rl.SetExitKey(nil)

@@ -16,12 +16,12 @@ Timer :: struct {
     on_complete: proc(),
     state: Timer_State,
     mode: Timer_Mode,
-	interval_type: Interval_Type
+	interval_type: Interval_Type,
 }
 
 Interval_Type :: enum u8 {
 	Time,
-	Tick
+	Tick,
 }
 
 Timer_State :: enum u8 {

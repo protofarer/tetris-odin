@@ -330,9 +330,7 @@ update_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 
 				// NOTE: this zeroes out the layout, thus no blocks to operate on (or render!)
 				// NOTE: other code keys off this value to signify no player controllable tetra on screen aka non-existent player tetra aka post-lock operations
-				s.tetramino = {
-					type = .None
-				}
+				s.tetramino = { type = .None }
 
 				y_positions_cleared := eval_lines_cleared(s.blocks)
 				s.lines_just_cleared_y_positions = y_positions_cleared
@@ -427,15 +425,22 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 
 	rl.ClearBackground(BACKGROUND_COLOR)
 
+	rl.BeginMode2D(game_camera())
+	// Background Texture
 	{
 		PLAYFIELD_BG_COLOR :: rl.Color{147,210,255,160}
 		tex := get_texture(.Background)
 		src := rl.Rectangle{0, 0, f32(tex.width), f32(tex.height)}
-		dst := rl.Rectangle{0, 0, WINDOW_W, WINDOW_H}
+		dst := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT}
 		rl.DrawTexturePro(tex, src, dst, {}, 0, PLAYFIELD_BG_COLOR)
 	}
+	// Right letterboxing
+	{
+		black_rect := rl.Rectangle{PIXEL_WINDOW_HEIGHT, 0, f32(rl.GetScreenWidth()), PIXEL_WINDOW_HEIGHT}
+		rl.DrawRectangleRec(black_rect, rl.BLACK)
+	}
 
-	rl.BeginMode2D(game_camera())
+
 	// Playfield Borders
 	{
 		tex := get_texture(.Border)
@@ -449,13 +454,13 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 			rl.DrawRectangle(
 				PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
 				PLAYFIELD_BORDER_THICKNESS, WINDOW_H, 
-				rl.GRAY
+				rl.GRAY,
 			)
 			dst := rl.Rectangle{
 				PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 
 				0, 
 				PLAYFIELD_BORDER_THICKNESS, 
-				PIXEL_WINDOW_HEIGHT
+				PIXEL_WINDOW_HEIGHT,
 			}
 			rl.DrawTexturePro(tex, src, dst, {}, 0, rl.RAYWHITE)
 		}
@@ -594,14 +599,14 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 					0, 
 					i32(x*BLOCK_PIXEL_SIZE +  PLAYFIELD_BORDER_THICKNESS),
 					PLAYFIELD_BLOCK_H * BLOCK_PIXEL_SIZE,
-					rl.BLUE
+					rl.BLUE,
 				)
 				rl.DrawLine(
 					PLAYFIELD_BORDER_THICKNESS,
 					i32(y * BLOCK_PIXEL_SIZE),
 					PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE + PLAYFIELD_BORDER_THICKNESS,
 					i32(y*BLOCK_PIXEL_SIZE),
-					rl.BLUE
+					rl.BLUE,
 				)
 			}
 		}
@@ -612,9 +617,9 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 			fmt.ctprintf(
 				"layout_pos: %v\nlevel_drop_rate: %v", 
 				s.tetramino.layout_field_position, 
-				s.level_drop_rate
+				s.level_drop_rate,
 			),
-			5, 5, 10, rl.WHITE
+			5, 5, 10, rl.WHITE,
 		)
 	}
 
@@ -769,11 +774,11 @@ randomize_tetra_type :: proc(s: Play_Scene) -> Tetramino_Type {
 }
 
 START_TETRA_CHOICE := [?]Tetramino_Type{
-	.I, .J, .L, .T
+	.I, .J, .L, .T,
 }
 
 ALL_TETRA_CHOICE := [?]Tetramino_Type{
-	.I, .J, .L, .T, .S, .Z, .O
+	.I, .J, .L, .T, .S, .Z, .O,
 }
 
 // Can return .None
@@ -860,7 +865,7 @@ get_tetramino_field_positions :: proc(layout: Tetramino_Layout, layout_field_pos
 			if val != 0 {
 				new_tetramino_positions[idx] = Position{
 						layout_field_position.x + i32(layout_local_x), 
-						layout_field_position.y + i32(layout_local_y)
+						layout_field_position.y + i32(layout_local_y),
 					}
 				idx += 1
 			}

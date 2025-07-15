@@ -255,7 +255,7 @@ init_menu_scene :: proc(s: ^Menu_Scene) {
 		start_level = 0,
 		garbage_height = 0,
 		hard_mode = false,
-		music_type = .A
+		music_type = .A,
 	}
 	s.submenu = .Start
 	s.game_type = .Marathon

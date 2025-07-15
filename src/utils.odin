@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib"
+// import rl "vendor:raylib"
 
 // Wraps os.read_entire_file and os.write_entire_file, but they also work with emscripten.
 @(require_results)
@@ -28,8 +28,8 @@ is_set_fully_flagged :: proc(set: bit_set[$E]) -> bool {
     return card(set) == len(E)
 }
 
-is_mouse_over_rect :: proc(x,y,w,h: f32) -> bool {
-	mouse_pos := rl.GetMousePosition()
-	return mouse_pos.x >= x && mouse_pos.x <= x + w &&
-	       mouse_pos.y >= y && mouse_pos.y <= y + h
-}
+// is_mouse_over_rect :: proc(x,y,w,h: f32) -> bool {
+// 	mouse_pos := rl.GetMousePosition()
+// 	return mouse_pos.x >= x && mouse_pos.x <= x + w &&
+// 	       mouse_pos.y >= y && mouse_pos.y <= y + h
+// }
