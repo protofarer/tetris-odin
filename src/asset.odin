@@ -9,7 +9,6 @@ Sound_ID :: enum {
 	Rotate,
 	Lock,
 	Clear,
-    Level,
 	Shift,
 	Music_A,
 	Music_B,

@@ -2,9 +2,7 @@ package game
 import sa "core:container/small_array"
 import rl "vendor:raylib"
 
-N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
 TETRAMINO_BLOCKS_PER_LAYOUT :: 4
-
 
 Tetramino :: struct {
 	type: Tetramino_Type,
@@ -14,7 +12,7 @@ Tetramino :: struct {
 	color: rl.Color,
 }
 
-Tetramino_Type :: enum {
+Tetramino_Type :: enum u8 {
 	None,
 	I,
 	J,
@@ -36,15 +34,16 @@ TETRA_COLORS := [Tetramino_Type]rl.Color{
 	.O = rl.GREEN,
 }
 
-// Layouts correspond to clockwise progression in increasing index
-// All tetraminos have 4 layouts, some layouts are repeats
-// Layout within playfield is the tetramino's "placement" position whereas blocks filled are the "collision" positions
-// TODO: bit_field
+// - Layouts correspond to a clockwise progression as index increases
+// - All tetraminos have 4 layouts, some layouts are repeated to stick to a 4 element array
+// - Layouts position and orient (rotation) the tetra within a set grid which is then positioned (field_position) within the playfield
 
+N_LAYOUTS_PER_TETRAMINO_TYPE :: 4
+Tetramino_Layout_Table :: sa.Small_Array(N_LAYOUTS_PER_TETRAMINO_TYPE, Tetramino_Layout)
 Tetramino_Layout :: [4][4]u8
-Tetramino_Layout_Table :: sa.Small_Array(4, Tetramino_Layout)
 LAYOUT_TABLES: [Tetramino_Type]Tetramino_Layout_Table
 
+// Game Boy Tetris layouts
 init_layout_tables :: proc() {
 	sa.append(&LAYOUT_TABLES[.T], Tetramino_Layout{
 		{0,0,0,0},

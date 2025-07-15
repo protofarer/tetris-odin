@@ -5,39 +5,33 @@ import rl "vendor:raylib"
 
 // This is a frame-dependent timer, i.e. it works by calling it every frame. It cannot function as an independent timer for any absolute passage of time that occurs between timer calls. State is updated primarily by `process_timer`
 
-
-// TODO: timer system
-// is_active
-// is_loop
-// is_done
-
-// TODO: CSDR accepting dt instead of calling rl, make independent package
+// CSDR using a `dt` param instead of calling rl.GetFrameTime to make independent package
 
 Timer :: struct {
     id: string, // for debugging
     accum: f32,
     duration: f32, // CSDR union to include an integer for the Tick interval_type
-    state: Timer_State,
-    mode: Timer_Mode,
     iterations: int,
     remaining: int,
     on_complete: proc(),
+    state: Timer_State,
+    mode: Timer_Mode,
 	interval_type: Interval_Type
 }
 
-Interval_Type :: enum {
+Interval_Type :: enum u8 {
 	Time,
 	Tick
 }
 
-Timer_State :: enum {
+Timer_State :: enum u8 {
     Inactive,
     Running,
     Paused,
     Completed,
 }
 
-Timer_Mode :: enum {
+Timer_Mode :: enum u8 {
     One_Shot,
     Loop,
     Countdown,
