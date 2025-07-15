@@ -421,11 +421,6 @@ update_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 }
 
 draw_play_scene :: proc(s: ^Play_Scene) {
-	rl.BeginDrawing()
-
-	rl.ClearBackground(BACKGROUND_COLOR)
-
-	rl.BeginMode2D(game_camera())
 	// Background Texture
 	{
 		PLAYFIELD_BG_COLOR :: rl.Color{147,210,255,160}
@@ -434,11 +429,6 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 		dst := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT}
 		rl.DrawTexturePro(tex, src, dst, {}, 0, PLAYFIELD_BG_COLOR)
 	}
-	// Right letterboxing
-	{
-		black_rect := rl.Rectangle{PIXEL_WINDOW_HEIGHT, 0, f32(rl.GetScreenWidth()), PIXEL_WINDOW_HEIGHT}
-		rl.DrawRectangleRec(black_rect, rl.BLACK)
-	}
 
 
 	// Playfield Borders
@@ -446,14 +436,14 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 		tex := get_texture(.Border)
 		src := rl.Rectangle{0, 0, f32(tex.width), f32(tex.height)}
 		{ // left
-			rl.DrawRectangle(0,0, PLAYFIELD_BORDER_THICKNESS, WINDOW_H, rl.GRAY)
+			rl.DrawRectangle(0,0, PLAYFIELD_BORDER_THICKNESS, PIXEL_WINDOW_HEIGHT, rl.GRAY)
 			dst := rl.Rectangle{0, 0, PLAYFIELD_BORDER_THICKNESS, PIXEL_WINDOW_HEIGHT}
 			rl.DrawTexturePro(tex, src, dst, {}, 0, rl.RAYWHITE)
 		}
 		{ // right
 			rl.DrawRectangle(
 				PLAYFIELD_BORDER_THICKNESS + PLAYFIELD_BLOCK_W * BLOCK_PIXEL_SIZE, 0,
-				PLAYFIELD_BORDER_THICKNESS, WINDOW_H, 
+				PLAYFIELD_BORDER_THICKNESS, PIXEL_WINDOW_HEIGHT, 
 				rl.GRAY,
 			)
 			dst := rl.Rectangle{
@@ -623,8 +613,6 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 		)
 	}
 
-	rl.EndMode2D()
-	rl.EndDrawing()
 }
 
 update_block_render_data :: proc(s: ^Play_Scene) {

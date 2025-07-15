@@ -57,6 +57,7 @@ Game_Memory :: struct {
 	debug: bool,
 	scene: Scene,
 	next_scene: Maybe(Scene_Type),
+	render_texture: rl.RenderTexture2D,
 }
 
 g: ^Game_Memory
@@ -81,22 +82,6 @@ GLOBAL_INPUT_MAP := [?]Input_Map_Entry(Global_Input){
 	{.Exit, .ESCAPE},
 }
 
-game_camera :: proc() -> rl.Camera2D {
-	if g == nil do log.error("game_camera: invalid state, Game_Memory nil")
-	h := f32(rl.GetScreenHeight())
-
-	return {
-		zoom = h/PIXEL_WINDOW_HEIGHT,
-		target = {},
-		offset = {},
-	}
-}
-
-// ui_camera :: proc() -> rl.Camera2D {
-// 	return {
-// 		zoom = f32(rl.GetScreenHeight())/PIXEL_WINDOW_HEIGHT,
-// 	}
-// }
 
 update :: proc() {
 	dt := rl.GetFrameTime()
@@ -111,7 +96,55 @@ update :: proc() {
 }
 
 draw :: proc() {
+	begin_letterbox_rendering()
 	draw_scene(&g.scene)
+	end_letterbox_rendering()
+}
+
+begin_letterbox_rendering :: proc() {
+	rl.BeginTextureMode(g.render_texture)
+	rl.ClearBackground(BACKGROUND_COLOR)
+}
+
+end_letterbox_rendering :: proc() {
+	rl.EndTextureMode()
+	
+	rl.BeginDrawing()
+	rl.ClearBackground(rl.BLACK)
+	
+	// Calculate letterbox dimensions
+	window_w := f32(rl.GetScreenWidth())
+	window_h := f32(rl.GetScreenHeight())
+	
+	scale := min(window_w / PIXEL_WINDOW_HEIGHT, window_h / PIXEL_WINDOW_HEIGHT)
+	viewport_size := PIXEL_WINDOW_HEIGHT * scale
+	
+	offset_x := (window_w - viewport_size) / 2
+	offset_y := (window_h - viewport_size) / 2
+	
+	// Draw the render texture with letterboxing
+	src := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, -PIXEL_WINDOW_HEIGHT} // negative height flips texture
+	dst := rl.Rectangle{offset_x, offset_y, viewport_size, viewport_size}
+	
+	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
+	
+	rl.EndDrawing()
+}
+
+screen_to_logical_coords :: proc(screen_pos: rl.Vector2) -> rl.Vector2 {
+	window_w := f32(rl.GetScreenWidth())
+	window_h := f32(rl.GetScreenHeight())
+	
+	scale := min(window_w / PIXEL_WINDOW_HEIGHT, window_h / PIXEL_WINDOW_HEIGHT)
+	viewport_size := PIXEL_WINDOW_HEIGHT * scale
+	
+	offset_x := (window_w - viewport_size) / 2
+	offset_y := (window_h - viewport_size) / 2
+	
+	logical_x := (screen_pos.x - offset_x) / scale
+	logical_y := (screen_pos.y - offset_y) / scale
+	
+	return {logical_x, logical_y}
 }
 
 // Run once: allocate, set global variable immutable values
@@ -134,6 +167,7 @@ setup :: proc() {
 	g = new(Game_Memory)
 	g^ = Game_Memory {
 		resman = resman,
+		render_texture = rl.LoadRenderTexture(PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT),
 	}
 }
 
@@ -183,6 +217,7 @@ game_should_run :: proc() -> bool {
 
 @(export)
 game_shutdown :: proc() {
+	rl.UnloadRenderTexture(g.render_texture)
 	free(g)
 }
 

@@ -153,17 +153,12 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 }
 
 draw_menu_scene :: proc(s: ^Menu_Scene) {
-	rl.BeginDrawing()
-	rl.ClearBackground(BACKGROUND_COLOR)
-
 	{
 		tex := get_texture(.Background)
 		src := rl.Rectangle{0, 0, f32(tex.width), f32(tex.height)}
-		dst := rl.Rectangle{0, 0, WINDOW_W, WINDOW_H}
+		dst := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT}
 		rl.DrawTexturePro(tex, src, dst, {}, 0, rl.Color{255,255,255,32})
 	}
-
-	rl.BeginMode2D(game_camera())
 
 	switch s.submenu {
 
@@ -246,8 +241,6 @@ draw_menu_scene :: proc(s: ^Menu_Scene) {
 		rl.DrawText("Backspace to return", x, y, 11, rl.BLACK)
 	}
 
-	rl.EndMode2D()
-	rl.EndDrawing()
 }
 
 init_menu_scene :: proc(s: ^Menu_Scene) {
