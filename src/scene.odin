@@ -1,6 +1,9 @@
+// CSDR Reusing and generalizing the code in this file for use in a simple game template. Currently OK for tetris.
+
 package game
 
 import "core:log"
+
 
 Scene_Type :: enum {
 	Menu,
@@ -12,7 +15,9 @@ Scene :: union {
 	Play_Scene,
 }
 
-update_scene :: proc(scene: ^Scene, next_scene: ^Maybe(Scene_Type), dt: f32) {
+
+// TODO: rm next_scene
+update_scene :: proc(scene: ^Scene,  dt: f32) {
 	switch &s in scene {
 	case Play_Scene:
 		update_play_scene(&s)

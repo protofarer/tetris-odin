@@ -88,7 +88,7 @@ update :: proc() {
 	dt := rl.GetFrameTime()
 
 	process_input_global()
-	update_scene(&g.scene, &g.next_scene, dt)
+	update_scene(&g.scene, dt)
 
 	if next, ok := g.next_scene.?; ok {
 		transition_scene(g.scene, next)
@@ -156,7 +156,7 @@ screen_to_logical_coords :: proc(screen_pos: rl.Vector2) -> rl.Vector2 {
 
 // Run once: allocate, set global variable immutable values
 setup :: proc() {
-	context.logger = log.create_console_logger(nil, {
+	context.logger = log.create_console_logger(.Warning, {
         // .Level,
         // .Terminal_Color,
         // .Short_File_Path,

@@ -1,7 +1,6 @@
 package game
 
 import "core:fmt"
-import "core:log"
 import rl "vendor:raylib"
 
 Menu_Scene :: struct {
@@ -78,7 +77,6 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 		} else {
 			unreachable()
 		}
-		log.info("Input action: Select game type:", s.game_type)
 
 	case .Down in input:
 		if s.submenu == .Start {
@@ -92,15 +90,12 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 				s.music_type = .A
 			}
 			play_selected_music(s.music_type)
-			log.info("Input action: Select next music", s.music_type)
 
 		} else if s.submenu == .Marathon {
 			s.start_level = max(s.start_level-1, MIN_START_LEVEL)
-			log.info("Input action: Decrease start level", s.start_level)
 
 		} else if s.submenu == .Lines {
 			s.garbage_height = max(s.garbage_height-1, MIN_GARBAGE_LEVEL)
-			log.info("Input action: Decrease garbage height", s.garbage_height)
 		}
 
 	case .Up in input:
@@ -115,24 +110,19 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 				s.music_type = .B
 			}
 			play_selected_music(s.music_type)
-			log.info("Input action: Select previous music", s.music_type)
 
 		} else if s.submenu == .Marathon {
 			s.start_level = min(s.start_level+1, MAX_START_LEVEL)
-			log.info("Input action: Increase start level", s.start_level)
 
 		} else if s.submenu == .Lines {
 			s.garbage_height = min(s.garbage_height+1, MAX_GARBAGE_LEVEL)
-			log.info("Input action: Increase garbage height", s.garbage_height)
 		}
 
 	case .Toggle_Hard_Mode in input:
 		s.hard_mode = !s.hard_mode
-		log.info("Input action: Toggle_Hard_Mode", s.hard_mode)
 
 	case .Goto_Play in input && s.submenu != .Start:
 		g.next_scene = .Play
-		log.info("Input action: Goto_Play")
 
 	case .Goto_Submenu in input && s.submenu == .Start:
 		if s.game_type == .Marathon {
@@ -140,13 +130,11 @@ process_input_menu_scene :: proc(s: ^Menu_Scene) -> bit_set[Menu_Input] {
 		} else if s.game_type == .Lines {
 			s.submenu = .Lines
 		}
-		log.info("Input action: Goto_Submenu", s.submenu)
 
 	case .Backto_Start_Submenu in input && s.submenu != .Start:
 		s.submenu = .Start
 		s.start_level = 0
 		s.garbage_height = 0
-		log.info("Input action: Backto_Start_Submenu")
 	}
 
 	return input

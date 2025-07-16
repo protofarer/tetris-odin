@@ -172,19 +172,16 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 		case .Shift_Left, .Shift_Right, .Rotate_CCW, .Rotate_CW:
 			delay_and_repeat_input(s, &input, entry.key, entry.input)
 			if rl.IsKeyDown(entry.key) {
-				log.info("Input action: shift/rotate", entry.input)
 			}
 
 		// (soft) Drop
 		case .Drop:
 			if rl.IsKeyDown(entry.key) {
 				input += {entry.input}
-				log.info("Input action: soft drop", entry.input)
 			}
 		case .Drop_Release:
 			if rl.IsKeyReleased(entry.key) {
 				input += {entry.input}
-				log.info("Input action: release soft drop", entry.input)
 			}
 		}
 	}
@@ -202,17 +199,14 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 	if g.debug {
 		if rl.IsKeyPressed(.G) {
 			s.is_game_over = true
-			log.info("Debug input action: is_game_over == true")
 		}
 		if rl.IsKeyPressed(.T) {
 			s.is_game_won = true
-			log.info("Debug input action: is_game_won == true")
 		}
 	}
 
 	if (s.is_game_over || s.is_game_won) && .Goto_Menu in input {
 		transition_scene(s^, .Menu)
-		log.info("Input action: transition scene to Menu")
 	}
 
 	if .Debug_Increase_Level in input {
@@ -220,18 +214,15 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 			s.level += 1
 			s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
 			play_sound(.Stage_Clear)
-			log.info("Debug input action: increase level")
 		}
 	} else if .Debug_Decrease_Level in input {
 		if s.level - 1 > 0 {
 			s.level -= 1
 			s.level_drop_rate = get_drop_rate(LEVEL_DROP_RATES[:], s.level, s.hard_mode)
 			play_sound(.Stage_Clear)
-			log.info("Debug input action: decrease level")
 		}
 	} else if .Debug_Toggle_Hard_Mode in input {
 		s.hard_mode = !s.hard_mode
-		log.info("Debug input action: toggle hard mode", s.hard_mode)
 	}
 	return input
 }
