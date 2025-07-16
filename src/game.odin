@@ -53,17 +53,18 @@ LINES_PER_LEVEL :: 10
 MAX_LEVEL :: len(LEVEL_DROP_RATES)
 
 Game_Memory :: struct {
-	game_state: Game_State, // CSDR app_state
+	app_state: App_State, // CSDR app_state
 	resman: ^Resource_Manager,
-	debug: bool,
 	scene: Scene,
 	next_scene: Maybe(Scene_Type),
 	render_texture: rl.RenderTexture2D,
+	debug: bool,
+	is_music_on: bool,
 }
 
 g: ^Game_Memory
 
-Game_State :: enum {
+App_State :: enum {
 	Running,
 	Exit,
 }
@@ -76,13 +77,14 @@ Input_Map_Entry :: struct ($T: typeid) {
 Global_Input :: enum {
 	Toggle_Debug,
 	Exit,
+	Toggle_Music,
 }
 
 GLOBAL_INPUT_MAP := [?]Input_Map_Entry(Global_Input){
 	{.Toggle_Debug, .GRAVE},
 	{.Exit, .ESCAPE},
+	{.Toggle_Music, .M},
 }
-
 
 update :: proc() {
 	dt := rl.GetFrameTime()
@@ -99,6 +101,20 @@ update :: proc() {
 draw :: proc() {
 	begin_letterbox_rendering()
 	draw_scene(&g.scene)
+	// debug
+	if g.debug {
+		mouse_pos := rl.GetMousePosition()
+		text := fmt.ctprintf("mouse_pos: %v,%v", 
+			mouse_pos.x, 
+			mouse_pos.y,
+		)
+		rl.DrawText(text, 5, 5, 8, rl.BLUE)
+
+		mouse_pos = get_mouse_position_logical()
+		text = fmt.ctprintf("mouse_pos, logical: %v,%v", mouse_pos.x, mouse_pos.y)
+		rl.DrawText(text, 5, 15, 8, rl.BLUE)
+
+	}
 	end_letterbox_rendering()
 }
 
@@ -119,23 +135,39 @@ end_letterbox_rendering :: proc() {
 	rl.ClearBackground(rl.BLACK)
 	
 	// Calculate letterbox dimensions
-	window_w := f32(rl.GetScreenWidth())
-	window_h := f32(rl.GetScreenHeight())
-	
-	scale := min(window_w / PIXEL_WINDOW_HEIGHT, window_h / PIXEL_WINDOW_HEIGHT)
-	viewport_size := PIXEL_WINDOW_HEIGHT * scale
-	
-	offset_x := (window_w - viewport_size) / 2
-	offset_y := (window_h - viewport_size) / 2
+	viewport_size := get_viewport_size()
+	offset_x, offset_y := get_viewport_offset()
 	
 	// Draw the render texture with letterboxing
 	render_texture_size: f32 = PIXEL_WINDOW_HEIGHT * RENDER_TEXTURE_SCALE
 	src := rl.Rectangle{0, 0, render_texture_size, -render_texture_size} // negative height flips texture
-	dst := rl.Rectangle{offset_x, offset_y, viewport_size, viewport_size}
+	dst := rl.Rectangle{-offset_x, -offset_y, viewport_size, viewport_size}
 	
 	rl.DrawTexturePro(g.render_texture.texture, src, dst, {}, 0, rl.WHITE)
 	
 	rl.EndDrawing()
+}
+
+get_viewport_scale :: proc() -> f32 {
+	window_w := f32(rl.GetScreenWidth())
+	window_h := f32(rl.GetScreenHeight())
+	scale := min(window_w / PIXEL_WINDOW_HEIGHT, window_h / PIXEL_WINDOW_HEIGHT)
+	return scale
+}
+
+get_viewport_size :: proc() -> f32 {
+	scale := get_viewport_scale()
+	size := PIXEL_WINDOW_HEIGHT * scale
+	return size
+}
+
+get_viewport_offset :: proc() -> (f32,f32) {
+	window_w := f32(rl.GetScreenWidth())
+	window_h := f32(rl.GetScreenHeight())
+	size := get_viewport_size()
+	off_x := -(window_w - size) / 2
+	off_y := -(window_h - size) / 2
+	return off_x, off_y
 }
 
 screen_to_logical_coords :: proc(screen_pos: rl.Vector2) -> rl.Vector2 {
@@ -180,8 +212,9 @@ setup :: proc() {
 
 // clear collections, set initial values
 init :: proc() {
-	g.game_state = .Running
+	g.app_state = .Running
 	g.debug = false
+	g.is_music_on = true
 	transition_scene({}, .Menu)
 }
 
@@ -195,7 +228,7 @@ game_update :: proc() {
 @(export)
 game_init_window :: proc() {
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
-	rl.InitWindow(WINDOW_W, WINDOW_H, "Tetris Remake")
+	rl.InitWindow(WINDOW_W, WINDOW_H, "Tetris Engine")
 	rl.SetWindowPosition(500, 250)
 	rl.SetTargetFPS(TICK_RATE)
 	rl.SetExitKey(nil)
@@ -219,7 +252,7 @@ game_should_run :: proc() -> bool {
 		}
 	}
 
-	return g.game_state != .Exit
+	return g.app_state != .Exit
 }
 
 @(export)
@@ -276,7 +309,7 @@ process_input_global :: proc() {
 	input: bit_set[Global_Input]
 	for entry in GLOBAL_INPUT_MAP {
 		switch entry.input {
-		case .Toggle_Debug, .Exit:
+		case .Toggle_Debug, .Exit, .Toggle_Music:
 			if rl.IsKeyPressed(entry.key) {
 				input += {entry.input}
 			}
@@ -284,11 +317,16 @@ process_input_global :: proc() {
 	}
 	if .Toggle_Debug in input {
 		g.debug = !g.debug
-		pr("toggle global debug")
 	} else if .Exit in input {
 		game_shutdown()
 		game_shutdown_window()
+	} else if .Toggle_Music in input {
+		toggle_music()
 	}
+}
+
+toggle_music :: proc() {
+	g.is_music_on = !g.is_music_on
 }
 
 play_sound :: proc(id: Sound_ID) {
@@ -308,4 +346,126 @@ restart_sound :: proc(id: Sound_ID) {
 		stop_sound(id)
 	}
 	play_sound(id)
+}
+
+is_music_playing :: proc(music_type: Music_Type) -> bool {
+	return is_sound_playing(get_music_id_from_music_type(music_type))
+}
+
+BUTTON_DEFAULT_PADDING :: 2
+
+Button :: struct {
+	x,y,w,h: i32,
+	font_size: i32,
+	fill_color: rl.Color,
+	fit_contents: bool,
+	label: string,
+	on_press: proc(s: ^Menu_Scene),
+}
+
+buttons: map[string]Button
+
+register_button :: proc(
+	label: string, x,y,w,h: i32, 
+	font_size: i32 = 8, 
+	fill_color: rl.Color = rl.LIGHTGRAY, 
+	on_press: proc(s: ^Menu_Scene), 
+	fit_contents: bool = false,
+	get_display_text: proc() -> string = nil,
+	state_ptr: ^bool = nil,
+) {
+
+	text := label
+	text_cstr := fmt.ctprint(text)
+	text_length := rl.MeasureText(text_cstr, font_size)
+
+	w_, h_: i32
+	if fit_contents {
+		w_ = text_length + BUTTON_DEFAULT_PADDING * 2
+		h_ = font_size + BUTTON_DEFAULT_PADDING * 2
+	} else {
+		w_ = w
+		h_ = h
+	}
+	buttons[label] = Button{
+		label= label, x = x,y = y,w = w_,h = h_, 
+		font_size = font_size, fill_color = fill_color, fit_contents = fit_contents,
+		on_press = on_press,
+	}
+}
+
+deregister_button :: proc(label: string) {
+	delete_key(&buttons, label)
+}
+
+clear_buttons :: proc() {
+	clear(&buttons)
+}
+
+// Label centered, constant padding
+draw_button :: proc(label: string, x,y,w,h: i32, font_size: i32 = 8, fill_color: rl.Color = rl.LIGHTGRAY, fit_contents: bool = false, display_text: string = "") {
+	x_ := x
+	y_ := y
+	w_ := w
+	h_ := h
+
+
+	// use display_text otherwise use label
+	text := display_text != "" ? display_text : label
+	text_cstr := fmt.ctprint(text)
+	text_length := rl.MeasureText(text_cstr, font_size)
+
+	if fit_contents {
+		w_ = text_length + BUTTON_DEFAULT_PADDING * 2
+		h_ = font_size + BUTTON_DEFAULT_PADDING * 2
+	}
+	text_x := (w_ - text_length) / 2
+	text_y := (h_ - font_size) / 2
+
+	rl.DrawRectangle(x_,y_,w_,h_,fill_color)
+	rl.DrawRectangleLinesEx(rl.Rectangle{f32(x_), f32(y_), f32(w_), f32(h_)}, 1, rl.BLACK)
+	rl.DrawText(text_cstr, x_ + text_x, y_ + text_y, font_size, rl.BLACK)
+
+	if g.debug {
+		rl.DrawRectangleLines(x_,y_,w_,h_,rl.BLUE)
+	}
+}
+
+update_buttons :: proc(s: ^Menu_Scene) {
+	is_mouse_pressed := rl.IsMouseButtonPressed(.LEFT) 
+	if !is_mouse_pressed do return
+
+	mouse_pos := get_mouse_position_logical()
+	for _, b in buttons {
+		is_over_button := mouse_pos.x >= f32(b.x) && mouse_pos.x <= f32(b.x + b.w) && mouse_pos.y >= f32(b.y) && mouse_pos.y <= f32(b.y + b.h)
+		if is_mouse_pressed && is_over_button {
+			if b.on_press != nil {
+				b.on_press(s)
+			}
+			break
+		}
+	}
+}
+
+get_mouse_position_logical :: proc() -> [2]f32 {
+	mouse_pos := rl.GetMousePosition() // window coords
+	// TODO:
+	// logical_mouse_pos := mouse_pos / ()
+	// convert to logical coords: viewport offset then scale
+	off_x, off_y := get_viewport_offset()
+	mouse_pos.x += off_x
+	mouse_pos.y += off_y
+	mouse_pos /= get_viewport_scale()
+	return mouse_pos
+}
+
+default_button_proc :: proc(s: ^Menu_Scene) {
+	pr("HELLO FROM BUTTON!")
+}
+
+// Updated to handle responsive labels
+draw_buttons :: proc() {
+    for label, b in buttons {
+        draw_button(label, b.x, b.y, b.w, b.h, b.font_size, b.fill_color, b.fit_contents, label)
+    }
 }

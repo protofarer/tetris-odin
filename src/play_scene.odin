@@ -38,18 +38,23 @@ Play_Scene :: struct {
 	soft_drop_counter: i32,
 	lines_cleared_accum: i32,
 	level_drop_rate: i32,
-	start_level: i32, // Marathon Game Type
-	garbage_height: i32, // Lines Game Type
-	hard_mode: bool,
+
+	using game_settings: Game_Settings,
+	// start_level: i32, // Marathon Game Type
+	// garbage_height: i32, // Lines Game Type
+	// hard_mode: bool,
+	// music_type: Music_Type,
+
 	is_game_over: bool,
 	is_game_won: bool,
 	is_paused: bool,
 	show_lines_cleared_flash: bool,
 
 	previous_tetra_type: Tetramino_Type,
-	music_type: Music_Type,
 
 	input: bit_set[Play_Input],
+	has_game_over_sound_played: bool,
+	has_game_win_sound_played: bool,
 }
 
 Playfield_Blocks :: [PLAYFIELD_BLOCK_H][PLAYFIELD_BLOCK_W]Tetramino_Type
@@ -91,6 +96,8 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 	s.show_lines_cleared_flash = true
 	s.music_type = game_settings.music_type
 
+	register_button("hello for play", 100, 100, 20, 8, 8, rl.BLUE, default_button_proc)
+
 	// Fill garbage height for lines game type: 2 * garbage_height
 	for y in 0..<2*s.garbage_height {
 		row := GARBAGE_PATTERN[y]
@@ -110,13 +117,30 @@ init_play_scene :: proc(s: ^Play_Scene, game_type: Game_Type, game_settings: Gam
 }
 
 update_play_scene :: proc(s: ^Play_Scene) {
+
 	input := process_input_play_scene(s)
 
 	if !s.is_game_over && !s.is_game_won && !s.is_paused {
 		update_playfield(s, input)
 	}
-	update_music(s.music_type, s.is_game_over, s.is_game_won, s.is_paused)
+
+	update_sound_transitions(s.music_type, s.is_game_over, s.is_game_won, s.is_paused, &s.has_game_over_sound_played, &s.has_game_win_sound_played)
+
 	update_block_render_data(s)
+
+	if g.debug {
+		if rl.IsKeyPressed(.G) {
+			s.is_game_over = true
+		}
+		if rl.IsKeyPressed(.T) {
+			s.is_game_won = true
+		}
+	}
+
+	if (s.is_game_over || s.is_game_won) && .Goto_Menu in input {
+		transition_scene(s^, .Menu)
+	}
+
 }
 
 Play_Input :: enum {
@@ -194,19 +218,6 @@ process_input_play_scene :: proc(s: ^Play_Scene) -> bit_set[Play_Input] {
 	}
 	if .Drop_Release in input {
 		s.soft_drop_counter = 0
-	}
-
-	if g.debug {
-		if rl.IsKeyPressed(.G) {
-			s.is_game_over = true
-		}
-		if rl.IsKeyPressed(.T) {
-			s.is_game_won = true
-		}
-	}
-
-	if (s.is_game_over || s.is_game_won) && .Goto_Menu in input {
-		transition_scene(s^, .Menu)
 	}
 
 	if .Debug_Increase_Level in input {
@@ -411,10 +422,11 @@ update_playfield :: proc(s: ^Play_Scene, input: bit_set[Play_Input]) {
 	}
 }
 
+PLAYFIELD_BG_COLOR :: rl.Color{147,210,255,160}
+
 draw_play_scene :: proc(s: ^Play_Scene) {
 	// Background Texture
 	{
-		PLAYFIELD_BG_COLOR :: rl.Color{147,210,255,160}
 		tex := get_texture(.Background)
 		src := rl.Rectangle{0, 0, f32(tex.width), f32(tex.height)}
 		dst := rl.Rectangle{0, 0, PIXEL_WINDOW_HEIGHT, PIXEL_WINDOW_HEIGHT}
@@ -592,18 +604,6 @@ draw_play_scene :: proc(s: ^Play_Scene) {
 			}
 		}
 	}
-
-	if g.debug {
-		rl.DrawText(
-			fmt.ctprintf(
-				"layout_pos: %v\nlevel_drop_rate: %v", 
-				s.tetramino.layout_field_position, 
-				s.level_drop_rate,
-			),
-			5, 5, 10, rl.WHITE,
-		)
-	}
-
 }
 
 update_block_render_data :: proc(s: ^Play_Scene) {
@@ -673,26 +673,37 @@ update_block_render_data :: proc(s: ^Play_Scene) {
 	}
 }
 
-update_music :: proc(music_type: Music_Type, game_over: bool, game_won: bool, paused: bool) {
-	// play game win sound
-	if game_won && is_sound_playing(get_music_id_from_music_type(music_type)){
-		stop_sound(get_music_id_from_music_type(music_type))
-		play_sound(.Stage_Clear)
+update_sound_transitions :: proc(music_type: Music_Type, game_over: bool, game_won: bool, paused: bool, has_game_over_sound_played: ^bool, has_game_win_sound_played: ^bool) {
+	if game_over {
+		stop_selected_music(music_type)
+		if !has_game_over_sound_played^ {
+			play_sound(.Game_Over)
+			has_game_over_sound_played^ = true
+
+		}
+		return
 	}
 
-	// play game over sound
-	if game_over && is_sound_playing(get_music_id_from_music_type(music_type)) {
-		stop_sound(get_music_id_from_music_type(music_type))
-		play_sound(.Game_Over)
+	if game_won {
+		stop_selected_music(music_type)
+		if !has_game_win_sound_played^ {
+			play_sound(.Stage_Clear)
+			has_game_win_sound_played^ = true
+		}
+		return
 	}
 
-	// loop music
-	if !is_sound_playing(get_music_id_from_music_type(music_type)) && (!game_won && !game_over && !paused) {
-		play_selected_music(music_type)
+	if g.is_music_on {
+		// loop
+		if !is_music_playing(music_type) {
+			play_selected_music(music_type)
+		}
+	} else {
+		stop_selected_music(music_type)
 	}
 
-	if paused && is_sound_playing(get_music_id_from_music_type(music_type)) {
-		stop_sound(get_music_id_from_music_type(music_type))
+	if paused && is_music_playing(music_type) {
+		stop_selected_music(music_type)
 	}
 }
 
